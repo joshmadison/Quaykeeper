@@ -116,6 +116,22 @@ class TestRunLogger:
         assert any(e.get("interrupted") and e["run_id"] == "orphan"
                    for e in hmod.history())
 
+    def test_interrupted_run_keeps_trigger_and_duration(self, tmp_state):
+        import os
+        from app import history as hmod
+        from app.history import RunLogger
+        rl = RunLogger("full", "scheduled")
+        rl.log("Processing stack: immich (ID: 6)")
+        # the process dies here: no finish(). Pretend it died 330s in.
+        os.utime(rl.path, (rl.started + 330, rl.started + 330))
+        rl._fh.close()
+        hmod.mark_interrupted()
+        e = [x for x in hmod.history() if x["run_id"] == rl.run_id][0]
+        assert e["interrupted"] is True
+        assert e["trigger"] == "scheduled"
+        assert e["duration_s"] == 330.0
+        assert "interrupted" in rl.path.read_text(encoding="utf-8")
+
     def test_run_log_file_written_and_readable(self, tmp_state):
         from app.history import RunLogger, run_log_path
         rl = RunLogger("full", "test")

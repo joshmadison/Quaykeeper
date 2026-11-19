@@ -88,25 +88,45 @@ def current_status() -> dict:
     return {"state": "idle", "runs": []}
 
 
-def mark_running(run_id: str, kind: str) -> None:
+def mark_running(run_id: str, kind: str, trigger: str | None = None) -> None:
     with _lock:
         st = current_status()
         st["state"] = "running"
-        st["current_run"] = {"run_id": run_id, "kind": kind, "started": time.time()}
+        st["current_run"] = {"run_id": run_id, "kind": kind, "trigger": trigger,
+                             "started": time.time()}
         _write_status(st)
 
 
 def mark_interrupted() -> None:
-    """Called at startup: convert a stale 'running' marker."""
+    """Called at startup: convert a stale 'running' marker.
+
+    The process died mid-run (container restart, OOM, host reboot). The run
+    is recorded as 'interrupted' - not as a regular failure - keeping its
+    original trigger. Its duration is taken from the run log's last write,
+    which is the closest thing to the moment the process went away."""
     st = current_status()
     if st.get("state") == "running":
         cur = st.pop("current_run", None)
         st["state"] = "interrupted"
         if cur:
+            started = cur.get("started")
+            ended = time.time()
+            log = run_log_path(cur.get("run_id") or "")
+            if log is not None:
+                try:
+                    ended = log.stat().st_mtime
+                    with open(log, "a", encoding="utf-8") as f:
+                        f.write(f"[{time.strftime('%H:%M:%S')}] [WARN] Run "
+                                f"interrupted: the process was restarted "
+                                f"before the run could finish.\n")
+                except OSError:
+                    pass
             entry = {
                 "run_id": cur.get("run_id"), "kind": cur.get("kind"),
-                "trigger": "startup-recovery", "started": cur.get("started"),
-                "finished": time.time(), "duration_s": None,
+                "trigger": cur.get("trigger") or "unknown",
+                "started": started, "finished": ended,
+                "duration_s": (round(ended - started, 1)
+                               if isinstance(started, (int, float)) else None),
                 "success": False, "interrupted": True, "steps": [],
             }
             with _lock:
@@ -176,7 +196,7 @@ class RunLogger:
         self.path = RUNS_DIR / f"{self.run_id}.log"
         self._fh = open(self.path, "w", encoding="utf-8")
         self.steps: list = []
-        mark_running(self.run_id, kind)
+        mark_running(self.run_id, kind, trigger)
 
     def log(self, msg: str) -> None:
         line = f"[{time.strftime('%H:%M:%S')}] {msg}"

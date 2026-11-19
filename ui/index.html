@@ -273,8 +273,8 @@ input[type=text],input[type=password],input[type=number],input[type=url],input[t
 <!-- ============================================================== HISTORY -->
 <div id="tab-history" style="display:none" class="tab">
   <div class="grid cards">
-    <div class="card"><div class="lbl">Success rate</div><div class="val" id="hRate">–</div><div class="sub">last 200 runs</div></div>
-    <div class="card"><div class="lbl">Avg duration</div><div class="val" id="hDur">–</div><div class="sub">full updates</div></div>
+    <div class="card"><div class="lbl">Success rate</div><div class="val" id="hRate">–</div><div class="sub" id="hRateSub">finished runs</div></div>
+    <div class="card"><div class="lbl">Avg duration</div><div class="val" id="hDur">–</div><div class="sub">successful full updates</div></div>
   </div>
   <section>
     <h2>Run log</h2>
@@ -1077,9 +1077,14 @@ async function loadHistory(){
  try{
   const hr=await api('/api/history');
   const h=hr.history||[];
-  const okN=h.filter(r=>r.success).length;
-  $('hRate').textContent=h.length?Math.round(okN/h.length*100)+'%':'–';
-  const full=h.filter(r=>r.kind==='full');
+  // rate over runs that actually finished: interrupted runs (process
+  // restarted mid-run) and self-update 'restarted' runs are no verdict
+  const done=h.filter(r=>!r.interrupted&&r.success!=null);
+  const okN=done.filter(r=>r.success).length;
+  const intN=h.filter(r=>r.interrupted).length;
+  $('hRate').textContent=done.length?Math.round(okN/done.length*100)+'%':'–';
+  $('hRateSub').textContent=`${done.length} finished`+(intN?` · ${intN} interrupted`:'');
+  const full=h.filter(r=>r.kind==='full'&&!r.interrupted&&r.success);
   const durs=full.map(r=>r.duration_s).filter(x=>x!=null);
   const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):null;
   $('hDur').textContent=avg!=null?(avg>=60?Math.floor(avg/60)+'m '+avg%60+'s':avg+'s'):'–';
@@ -1092,7 +1097,7 @@ async function loadHistory(){
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="mono">${esc(r.run_id)}</td><td>${esc(r.kind)}</td><td>${esc(r.trigger)}</td>
      <td>${fmt(r.finished)}</td><td class="num">${dur}</td>
-     <td>${r.success==null?'<span class="badge b-mut">restarted</span>':r.success?'<span class="badge b-ok">success</span>':'<span class="badge b-err">failed</span>'}</td>
+     <td>${r.interrupted?'<span class="badge b-warn" title="The process was restarted before the run could finish">interrupted</span>':r.success==null?'<span class="badge b-mut">restarted</span>':r.success?'<span class="badge b-ok">success</span>':'<span class="badge b-err">failed</span>'}</td>
      <td><button class="btn sm sec" data-run="${esc(r.run_id)}">Log</button></td>`;
     tr.querySelector('[data-run]').onclick=()=>showRunLog(r.run_id);
     tb.appendChild(tr);
