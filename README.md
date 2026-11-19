@@ -1,23 +1,37 @@
-# Portainer Update Service
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/quaykeeper-lockup-dark.svg">
+    <img src="docs/logo/quaykeeper-lockup-light.svg" alt="Quaykeeper — for Portainer" width="420">
+  </picture>
+</p>
 
-**Pull. Redeploy. Done.**
+<p align="center">
+  <b>Keeps every container on your quay up to date — while you sleep.</b>
+</p>
 
-Keep every Portainer stack on current images without opening Portainer. This
-service checks your stacks against their registries, redeploys only what
-changed, backs up first, cleans up after itself, and keeps a readable record of
+<p align="center">
+  <a href="https://github.com/joshmadison/quaykeeper/actions/workflows/ci.yml"><img src="https://github.com/joshmadison/quaykeeper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-b8f35a?labelColor=0a0b0a" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.12%2B-b8f35a?labelColor=0a0b0a&logo=python&logoColor=e9ede4" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/docker-ready-b8f35a?labelColor=0a0b0a&logo=docker&logoColor=e9ede4" alt="Docker ready">
+</p>
+
+Quaykeeper keeps every Portainer stack on current images without you opening
+Portainer. It checks your stacks against their registries, redeploys only what
+changed, backs up first, cleans up after itself and keeps a readable record of
 every run. Self-hosted — no accounts, no cloud, no telemetry.
-
-[![CI](https://github.com/joshmadison/Portainer-Update-Service/actions/workflows/ci.yml/badge.svg)](https://github.com/joshmadison/Portainer-Update-Service/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-30d158.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Docker ready](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="Dashboard: updates available, last and next run, reclaimable space, and per-stack update status" width="100%">
 </p>
 <p align="center">
-  <sub>One page answers the only three questions that matter: what changed, when did it last run, when does it run next.</sub>
+  <sub>One page answers the three questions that matter: what changed, when did it last run, when does it run next.</sub>
 </p>
+
+> [!NOTE]
+> Quaykeeper was called **Portainer Update Service** before. Existing
+> installs keep working: the old `PUS_*` environment variables are still
+> read, and the data volumes kept their names.
 
 ## Features
 
@@ -42,7 +56,8 @@ every run. Self-hosted — no accounts, no cloud, no telemetry.
 - **Cleanup with restraint.** Only unused images and build cache are removed.
   Stopped containers and their networks stay: they encode your intent.
 - **A history that answers questions.** Steps, duration, live log, success
-  rate and 30-day reclaimed space.
+  rate and 30-day reclaimed space. Runs that were cut short by a restart are
+  marked *interrupted* instead of being counted as failures.
 - **Local by design.** The app talks to your Portainer and the registries you
   already use. Nothing else.
 
@@ -81,7 +96,7 @@ the tail of the log, so you can see what it is doing without leaving the page.
 - A Portainer **API key with admin rights** — *Settings → API keys → Add API key*
 
 The key needs admin rights because pruning and backups are admin-only
-endpoints. Portainer may use a self-signed certificate; the service expects
+endpoints. Portainer may use a self-signed certificate; Quaykeeper expects
 that by default.
 
 ## Quick start
@@ -89,15 +104,15 @@ that by default.
 ### Option A — as a Portainer stack (recommended)
 
 1. **Stacks → Add stack → Repository**
-2. Repository URL: `https://github.com/joshmadison/Portainer-Update-Service`
+2. Repository URL: `https://github.com/joshmadison/quaykeeper`
    Build method **Dockerfile**, compose path `docker-compose.yml`
 3. Add these environment variables (only the first is required):
 
    | Variable | Value | Why |
    |---|---|---|
-   | `PUS_LISTEN_HOST` | `0.0.0.0` | Required inside a container |
+   | `QK_LISTEN_HOST` | `0.0.0.0` | Required inside a container |
    | `TZ` | e.g. `Europe/Berlin` | Timezone the schedule refers to |
-   | `PUS_AUTH_TOKEN` | e.g. `change-me` | **Recommended** — protects the UI/API |
+   | `QK_AUTH_TOKEN` | e.g. `change-me` | **Recommended** — protects the UI/API |
 
 4. **Deploy the stack**, then open `http://<host>:8090`
 5. In **Settings**: enter the Portainer URL, paste the API key, **Test
@@ -109,14 +124,14 @@ redeploys.
 ### Option B — docker compose
 
 ```bash
-git clone https://github.com/joshmadison/Portainer-Update-Service.git
-cd Portainer-Update-Service
+git clone https://github.com/joshmadison/quaykeeper.git
+cd quaykeeper
 docker compose up -d --build
 # open http://localhost:8090 and finish setup in Settings
 ```
 
 The shipped compose file leaves the credentials empty on purpose: configure
-them in the UI, or uncomment `PUS_PORTAINER_URL` / `PUS_PORTAINER_API_KEY`.
+them in the UI, or uncomment `QK_PORTAINER_URL` / `QK_PORTAINER_API_KEY`.
 Environment variables win over settings made in the UI.
 
 ### Option C — local Python
@@ -183,8 +198,10 @@ before it is saved — and if an environment variable exists for a key, it wins.
 </p>
 
 Every run — scheduled, manual, redeploy, prune, rollback, self-update — is
-recorded with its steps, duration and full log. Reclaimed space is aggregated
-over the last 30 days.
+recorded with its steps, duration and full log. If the container is restarted
+in the middle of a run, that run shows up as **interrupted** with its original
+trigger; the success rate only counts runs that actually finished. Reclaimed
+space is aggregated over the last 30 days.
 
 ## Configuration
 
@@ -193,31 +210,32 @@ Most people never touch a config file: the UI covers everything and writes
 [`config/config.example.yaml`](config/config.example.yaml), including the
 optional custom repair rules.
 
-Every key can also be set as an environment variable with the `PUS_` prefix
-(`portainer_url` → `PUS_PORTAINER_URL`), which is handy for stacks deployed
-from Git.
+Every key can also be set as an environment variable with the `QK_` prefix
+(`portainer_url` → `QK_PORTAINER_URL`), which is handy for stacks deployed
+from Git. The pre-rename prefix `PUS_` still works; if both are set, `QK_`
+wins.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `PUS_PORTAINER_URL` | — | Portainer base URL |
-| `PUS_PORTAINER_API_KEY` | — | Portainer API key (admin) |
-| `PUS_PORTAINER_ENDPOINT_ID` | auto | Pin an endpoint if auto-detect picks the wrong one |
-| `PUS_LISTEN_HOST` | `127.0.0.1` | Bind address — **must be `0.0.0.0` in a container** |
-| `PUS_LISTEN_PORT` | `8090` | Web UI port |
-| `PUS_AUTH_TOKEN` | — | If set, mutating API calls need `Authorization: Bearer <token>` |
-| `PUS_UPDATE_SCHEDULE_MODE` | `interval` | `interval`, `daily` or `weekly` |
-| `PUS_UPDATE_INTERVAL_HOURS` | `168` | Interval mode: hours between runs |
-| `PUS_UPDATE_SCHEDULE_TIME` | `03:30` | Daily/weekly run time, `HH:MM` |
-| `PUS_UPDATE_SCHEDULE_DAY` | `0` | Weekly mode: `0` = Monday … `6` = Sunday |
-| `PUS_TLS_VERIFY` | `false` | Verify Portainer's TLS certificate |
-| `PUS_TLS_CA_FILE` | — | Path to a CA/cert to verify a self-signed Portainer cert |
-| `PUS_MAX_PARALLEL_DEPLOYS` | `3` | Stacks redeployed at once |
-| `PUS_DEPLOY_WAIT_TIME` | `300` | Seconds to wait for containers to become healthy |
-| `PUS_KEEP_BACKUPS` | `5` | Portainer backups to keep |
-| `PUS_CHECK_CACHE_MINUTES` | `30` | Registry result cache TTL (respects rate limits) |
-| `PUS_NOTIFY_WEBHOOK` | — | POST a JSON summary here when a run fails (ntfy-compatible) |
-| `PUS_INCLUDE_PORTAINER` | `false` | Also update Portainer itself (see below) |
-| `PUS_REPAIRS_ENABLED` | `true` | Automatic network integrity repairs |
+| `QK_PORTAINER_URL` | — | Portainer base URL |
+| `QK_PORTAINER_API_KEY` | — | Portainer API key (admin) |
+| `QK_PORTAINER_ENDPOINT_ID` | auto | Pin an endpoint if auto-detect picks the wrong one |
+| `QK_LISTEN_HOST` | `127.0.0.1` | Bind address — **must be `0.0.0.0` in a container** |
+| `QK_LISTEN_PORT` | `8090` | Web UI port |
+| `QK_AUTH_TOKEN` | — | If set, mutating API calls need `Authorization: Bearer <token>` |
+| `QK_UPDATE_SCHEDULE_MODE` | `interval` | `interval`, `daily` or `weekly` |
+| `QK_UPDATE_INTERVAL_HOURS` | `168` | Interval mode: hours between runs |
+| `QK_UPDATE_SCHEDULE_TIME` | `03:30` | Daily/weekly run time, `HH:MM` |
+| `QK_UPDATE_SCHEDULE_DAY` | `0` | Weekly mode: `0` = Monday … `6` = Sunday |
+| `QK_TLS_VERIFY` | `false` | Verify Portainer's TLS certificate |
+| `QK_TLS_CA_FILE` | — | Path to a CA/cert to verify a self-signed Portainer cert |
+| `QK_MAX_PARALLEL_DEPLOYS` | `3` | Stacks redeployed at once |
+| `QK_DEPLOY_WAIT_TIME` | `300` | Seconds to wait for containers to become healthy |
+| `QK_KEEP_BACKUPS` | `5` | Portainer backups to keep |
+| `QK_CHECK_CACHE_MINUTES` | `30` | Registry result cache TTL (respects rate limits) |
+| `QK_NOTIFY_WEBHOOK` | — | POST a JSON summary here when a run fails (ntfy-compatible) |
+| `QK_INCLUDE_PORTAINER` | `false` | Also update Portainer itself (see below) |
+| `QK_REPAIRS_ENABLED` | `true` | Automatic network integrity repairs |
 
 ## Updating Portainer itself (optional)
 
@@ -235,14 +253,15 @@ mount** to verify the wiring. A full run then ends with `docker compose pull &&
 docker compose up -d` in that directory — after everything else has finished,
 so the update doesn't cut its own run short.
 
-The app's own stack is excluded from regular runs for the same reason. Use
-**Update P.U.S.** in Settings when you want to move it forward deliberately.
+Quaykeeper's own stack is excluded from regular runs for the same reason. Use
+**Update Quaykeeper** in Settings when you want to move it forward
+deliberately.
 
 ## Security
 
 > [!WARNING]
 > The UI has **no login**. If it is reachable from other machines, set
-> `auth_token` (or `PUS_AUTH_TOKEN`) — that protects every mutating endpoint —
+> `auth_token` (or `QK_AUTH_TOKEN`) — that protects every mutating endpoint —
 > or put an authenticated reverse proxy in front.
 
 - Mutating requests are also CSRF-guarded when no token is configured: a
@@ -271,7 +290,7 @@ Every UI action is an API call, so scripts and dashboards can use it too.
 | `POST` | `/api/check` | Force an update check |
 | `POST` | `/api/update` | Start a full update run |
 | `POST` | `/api/prune` | Prune images and build cache now |
-| `POST` | `/api/self_update` | Redeploy this app's own stack |
+| `POST` | `/api/self_update` | Redeploy Quaykeeper's own stack |
 | `GET` | `/api/inventory` | Unused images and networks |
 | `GET` | `/api/runs/current` | Live progress of the active job |
 | `GET` | `/api/runs/<id>/log` | Full run log (plain text) |
@@ -279,7 +298,7 @@ Every UI action is an API call, so scripts and dashboards can use it too.
 | `GET` | `/api/versions?image=nginx` | Available tags for an image |
 | `GET` | `/api/endpoints` | Portainer endpoints |
 | `GET`/`POST` | `/api/settings` | Read or change settings |
-| `GET` | `/healthz` | Liveness and scheduler heartbeat |
+| `GET` | `/healthz` | Liveness, scheduler heartbeat and whether a job is running |
 
 ```bash
 curl -X POST -H "Authorization: Bearer $TOKEN" \
@@ -291,10 +310,11 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 ```bash
 pip install -r requirements.txt pytest pytest-timeout
 python -m pytest tests/ -q
-# 119 passed
+# 125 passed
 ```
 
-The UI is a single `ui/index.html` — no build step, no dependencies. CI runs
+The UI is a single `ui/index.html` plus two bundled fonts — no build step, no
+CDN, no dependencies. CI runs
 the test suite plus four cheap gates that catch the failures a build step would
 have caught: import, byte-compile, JS syntax (via `dukpy`) and duplicate HTML
 ids.
@@ -315,6 +335,8 @@ app/                    Python package
   jobs.py               single-job gate
   config.py             config loading, validation, persistence
 ui/index.html           the web UI (single file, no build step)
+ui/fonts/               Geist + Geist Mono (SIL OFL)
+docs/logo/              logo, app icon and lockups (SVG + PNG)
 config/config.example.yaml
 docs/screenshots/       the images in this README
 tests/                  pytest suite
@@ -322,6 +344,13 @@ docker-compose.yml
 Dockerfile
 run.py                  entry point
 ```
+
+## Design
+
+The UI uses the *Nightshift* look: near-black surfaces, one phosphor-green
+accent (`#b8f35a`) and a lot of monospace — a tool that works at 03:30. The
+logo is the quay keeper's lantern, lit while the updates run. Logo files for
+dark and light backgrounds live in [`docs/logo/`](docs/logo).
 
 ## License
 
