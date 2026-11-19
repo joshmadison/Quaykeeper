@@ -120,25 +120,37 @@ class Scheduler:
 
     def _loop(self):
         while not self._stop.wait(10):
-            self.last_tick = time.time()
-            load()  # pick up config changes from the UI
-            try:
-                now = time.time()
-                if now >= self.next_check:
-                    self._run_check()
-                    self._bump_check()
-                if now >= self.next_full_update:
-                    self._run_update("scheduled")
-                    self._bump_full()
-            except Exception:
-                # never swallow: log to stderr (visible in journald/systemd)
-                self.last_error = traceback.format_exc()
-                print(f"[scheduler] loop error:\n{self.last_error}", file=sys.stderr,
-                      flush=True)
-                # push the schedule forward anyway so a bad config value
-                # cannot wedge the loop into a 10-second hot cycle
+            self._tick()
+
+    def _tick(self):
+        """One scheduler heartbeat. Returns quickly: due jobs are handed to
+        worker threads (see trigger_check_async / trigger_update_async)."""
+        self.last_tick = time.time()
+        load()  # pick up config changes from the UI
+        try:
+            now = time.time()
+            # Jobs run in worker threads, never inline: the loop must keep
+            # ticking while a 3-5 min update runs. An inline run froze
+            # last_tick, /healthz went 503 after 120s, the container
+            # healthcheck marked us unhealthy and the container was
+            # restarted mid-run (seen as nightly 'startup-recovery' fails).
+            if now >= self.next_check:
                 self._bump_check()
+                self.trigger_check_async()
+            if now >= self.next_full_update:
+                self.trigger_update_async("scheduled")
+                # bump even when the gate was busy: a running manual
+                # update satisfies this slot
                 self._bump_full()
+        except Exception:
+            # never swallow: log to stderr (visible in journald/systemd)
+            self.last_error = traceback.format_exc()
+            print(f"[scheduler] loop error:\n{self.last_error}", file=sys.stderr,
+                  flush=True)
+            # push the schedule forward anyway so a bad config value
+            # cannot wedge the loop into a 10-second hot cycle
+            self._bump_check()
+            self._bump_full()
 
     def schedule_desc(self) -> str:
         return _schedule_desc()
@@ -193,49 +205,14 @@ class Scheduler:
             client = self._client()
             if not client:
                 # not configured yet - retry soon instead of waiting a full
-                # interval (first-run flow: user may be mid-setup)
+                # interval (first-run flow: user may be mid-setup). The loop
+                # bumps BEFORE starting this worker, so this override sticks.
                 self.next_check = time.time() + 600
+                self._persist()
                 return
             checker.run_check(client, client.endpoint_id)
         finally:
             gate.release()
-
-    def _run_update(self, trigger: str):
-        if not gate.try_acquire("update"):
-            return
-        runlog = None
-        try:
-            runlog = RunLogger("full", trigger)
-            gate.set_runlog(runlog)  # attach logger to the lock we already hold
-            ok = updater.run_full_update(runlog)
-            runlog.finish(ok)
-            if ok:
-                self.consecutive_failures = 0
-            else:
-                self.consecutive_failures += 1
-                self._notify_failure(runlog)
-        except Exception:
-            self.consecutive_failures += 1
-            self.last_error = traceback.format_exc()
-            print(f"[scheduler] update crashed:\n{self.last_error}", file=sys.stderr,
-                  flush=True)
-            if runlog:
-                # the traceback MUST land in the run log - without it the
-                # history shows only 'Run finished, success=False' with no
-                # hint what crashed (seen with self-update compose crashes)
-                try:
-                    runlog.log("[ERROR] update crashed with unhandled "
-                               "exception:\n" + self.last_error)
-                except Exception:  # noqa: BLE001
-                    pass
-                runlog.finish(False)
-        finally:
-            # run_full_update may have finalized the runlog already (self-stack
-            # redeploy kills the process before returning) - finish() is
-            # idempotent, so a normal return also lands here safely.
-            gate.release()
-        # a manual run also satisfies the schedule - no immediate double run
-        self._bump_full()
 
     def _notify_failure(self, runlog):
         url = get("notify_webhook", "")

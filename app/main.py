@@ -130,12 +130,15 @@ def api_status():
 def healthz():
     """Liveness + scheduler heartbeat. 503 if the scheduler tick is stale."""
     tick = scheduler.last_tick
+    # the scheduler loop ticks every 10s and never runs jobs inline, so a
+    # stale tick means the loop thread is dead or wedged - not 'busy'
     stale = tick is None or time.time() - tick > 120
     return jsonify({
         "ok": not stale,
         "last_tick": tick,
         "state": history.current_status().get("state"),
         "consecutive_failures": scheduler.consecutive_failures,
+        "busy": scheduler.is_busy(),
     }), (200 if not stale else 503)
 
 
