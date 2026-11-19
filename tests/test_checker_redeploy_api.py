@@ -103,7 +103,7 @@ class TestApiSmoke:
     def test_index_served(self, client):
         r = client.get("/")
         assert r.status_code == 200
-        assert b"Portainer Update Service" in r.data
+        assert b"Quaykeeper" in r.data
 
     def test_status_shape(self, client):
         r = client.get("/api/status")
@@ -123,7 +123,7 @@ class TestApiSmoke:
     def test_auth_gate_with_token(self, client, monkeypatch):
         from app import config as cfg
         monkeypatch.setattr("app.config._cfg", None)
-        monkeypatch.setenv("PUS_AUTH_TOKEN", "secret123")
+        monkeypatch.setenv("QK_AUTH_TOKEN", "secret123")
         cfg.load(force=True)
         # no token -> 401
         r = client.post("/api/update")

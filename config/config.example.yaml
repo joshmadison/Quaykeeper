@@ -1,4 +1,4 @@
-# Portainer Update Service configuration
+# Quaykeeper configuration
 # Copy to config/config.yaml and fill in your values. NEVER commit config.yaml!
 # All of these settings (except repairs) can also be changed in the web UI.
 

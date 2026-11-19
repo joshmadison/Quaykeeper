@@ -1,4 +1,4 @@
-"""Flask app: REST API + static frontend for the Portainer update service.
+"""Flask app: REST API + static frontend for Quaykeeper.
 
 Hardened: shared job gate for all mutating routes, optional Bearer-token auth,
 input validation, non-blocking /api/stacks, run-progress endpoints, /healthz.
@@ -543,7 +543,7 @@ def api_update():
 
 @app.route("/api/self_update", methods=["POST"])
 def api_self_update():
-    """'Update PUS' button: deliberately redeploy this app's own stack.
+    """'Update Quaykeeper' button: deliberately redeploy this app's own stack.
 
     Runs in a thread - the redeploy replaces this container mid-request,
     so the response may never reach the browser (expected!). The run is
@@ -685,7 +685,7 @@ def main():
     # workers (e.g. gunicorn -w 4) would race concurrent full-updates and
     # corrupt state. Threads>1 is fine; workers>1 is not.
     from waitress import serve
-    print(f"[update-service] listening on http://{host}:{port}")
+    print(f"[quaykeeper] listening on http://{host}:{port}")
     serve(app, host=host, port=port, threads=8)
 
 

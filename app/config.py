@@ -13,21 +13,33 @@ from pathlib import Path
 import yaml
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-# PUS_DATA_DIR lets tests (and exotic deployments) relocate all state files
+# Container deployments set configuration via env vars (QK_<KEY>) -
+# they take precedence over config.yaml. See docker-compose.yml.
+# The legacy prefix PUS_ (from the 'Portainer Update Service' days) is still
+# honoured, so existing deployments keep working after the rename.
+ENV_PREFIX = "QK_"
+LEGACY_ENV_PREFIX = "PUS_"
+
+
+def env(name: str, default=None):
+    """QK_<NAME>, falling back to the legacy PUS_<NAME>."""
+    for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
+        val = os.environ.get(prefix + name)
+        if val not in (None, ""):
+            return val
+    return default
+
+
+# QK_DATA_DIR lets tests (and exotic deployments) relocate all state files
 # without touching the code - must be set BEFORE the app modules load.
-# PUS_CONFIG_DIR relocates the config file the same way (tests must not see
+# QK_CONFIG_DIR relocates the config file the same way (tests must not see
 # the developer's live config.yaml with real credentials in it).
-_DATA_DIR_OVERRIDE = os.environ.get("PUS_DATA_DIR", "")
-CONFIG_DIR = Path(os.environ.get("PUS_CONFIG_DIR", "")) \
-    if os.environ.get("PUS_CONFIG_DIR", "") else BASE_DIR / "config"
+_DATA_DIR_OVERRIDE = env("DATA_DIR", "")
+CONFIG_DIR = Path(env("CONFIG_DIR")) if env("CONFIG_DIR") else BASE_DIR / "config"
 DATA_DIR = Path(_DATA_DIR_OVERRIDE) if _DATA_DIR_OVERRIDE else BASE_DIR / "data"
 RUNS_DIR = DATA_DIR / "runs"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 UI_DIR = BASE_DIR / "ui"
-
-# Container deployments set configuration via env vars (PUS_<KEY>) -
-# they take precedence over config.yaml. See docker-compose.yml.
-ENV_PREFIX = "PUS_"
 
 DEFAULTS = {
     "portainer_url": "",
@@ -144,7 +156,7 @@ def load(force: bool = False) -> dict:
             cfg.update({k: v for k, v in user.items()
                         if k not in ("repairs", "repairs_enabled")})
             cfg["repairs"] = {**DEFAULTS["repairs"], **(user.get("repairs") or {})}
-        # env overrides (container deployments): PUS_PORTAINER_URL, PUS_LISTEN_HOST, ...
+        # env overrides (container deployments): QK_PORTAINER_URL, QK_LISTEN_HOST, ...
         # YAML coercion ONLY for keys whose type is int/bool/enum - string
         # settings (auth_token, api_key, urls, ...) must be taken LITERALLY:
         # yaml.safe_load("no") -> False (silently disabled auth!), keys with
@@ -152,7 +164,7 @@ def load(force: bool = False) -> dict:
         for key in list(cfg.keys()):
             if key == "repairs":
                 continue
-            env_val = os.environ.get(ENV_PREFIX + key.upper())
+            env_val = env(key.upper())
             if env_val is None or env_val == "":
                 continue
             if key in INT_RANGES or key in STR_ENUMS or key == "update_schedule_time":
@@ -167,7 +179,7 @@ def load(force: bool = False) -> dict:
                 cfg[key] = env_val  # verbatim string
         # repairs_enabled: flat UI/API alias for cfg["repairs"]["enabled"]
         # (the nested dict is config.yaml-only; the UI toggles the flat key)
-        env_rep = os.environ.get(ENV_PREFIX + "REPAIRS_ENABLED")
+        env_rep = env("REPAIRS_ENABLED")
         if env_rep not in (None, ""):
             cfg["repairs"]["enabled"] = str(env_rep).strip().lower() in (
                 "true", "1", "yes", "on")

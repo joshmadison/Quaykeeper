@@ -192,7 +192,7 @@ class TestRollbackApi:
     def client(self, tmp_state, monkeypatch):
         from app.main import app
         app.config["TESTING"] = True
-        monkeypatch.setenv("PUS_CONFIG_DIR", str(tmp_state.parent / "cfg"))
+        monkeypatch.setenv("QK_CONFIG_DIR", str(tmp_state.parent / "cfg"))
         with app.test_client() as c:
             yield c
 

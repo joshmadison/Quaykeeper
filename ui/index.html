@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0f141a">
 <meta name="description" content="Keep your Portainer stacks up to date — automatically, on your schedule.">
-<title>Portainer Update Service</title>
+<title>Quaykeeper</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f141a'/%3E%3Ccircle cx='8' cy='8' r='4' fill='%233aa0ff'/%3E%3C/svg%3E">
 <style>
 :root{
@@ -208,7 +208,7 @@ input[type=text],input[type=password],input[type=number],input[type=url],input[t
 </head>
 <body>
 <header>
-  <h1><span class="dot" id="hdrDot" title="service status"></span> Portainer Update Service</h1>
+  <h1><span class="dot" id="hdrDot" title="service status"></span> Quaykeeper</h1>
   <nav>
     <span class="nav-pill" aria-hidden="true"></span>
     <button data-tab="dash" class="active" aria-current="page">Dashboard</button>
@@ -349,7 +349,7 @@ input[type=text],input[type=password],input[type=number],input[type=url],input[t
     <h2>System update</h2>
     <div style="color:var(--mut);font-size:12px">This app's own stack is excluded from regular update runs (redeploying it would stop the update itself). Update it deliberately here - the container restarts and the UI reconnects in a few seconds.</div>
     <div class="row" style="margin-top:10px">
-      <button class="btn" id="btnSelfUpdate">Update P.U.S.</button>
+      <button class="btn" id="btnSelfUpdate">Update Quaykeeper</button>
       <span class="mono" id="selfUpdateResult"></span>
     </div>
 
@@ -492,7 +492,7 @@ const rubberband=(over,dim,c=0.55)=>(over*dim*c)/(dim+c*Math.abs(over));
 
 
 /* ---------------------------------------------------------------- auth */
-let AUTH_TOKEN = localStorage.getItem('pus_token') || '';
+let AUTH_TOKEN = localStorage.getItem('qk_token') || localStorage.getItem('pus_token') || '';
 let AUTH_ENABLED = false;
 
 function authHeaders(extra){
@@ -522,7 +522,7 @@ async function api(path,opts={}){
  const r=await fetch(path,opts);
  if(r.status===401&&AUTH_ENABLED){
   const tok=prompt('This instance requires an auth token.\n(Settings > auth_token in config.yaml):');
-  if(tok!==null){AUTH_TOKEN=tok.trim();localStorage.setItem('pus_token',AUTH_TOKEN);}
+  if(tok!==null){AUTH_TOKEN=tok.trim();localStorage.setItem('qk_token',AUTH_TOKEN);}
   if(AUTH_TOKEN){opts.headers=authHeaders(opts.headers);return api(path,opts)}
  }
  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.statusText);return j}
@@ -670,7 +670,7 @@ const PHASES={preflight:'pre-flight checks',backup:'Portainer backup',prune:'doc
  redeploy_stacks:'redeploying stacks',reconciliation_sweep:'verification sweep',
  post_deployment_repairs:'post-deployment repairs',update_portainer:'Portainer self-update',
  docker_prune:'docker prune',pin_version:'version pin',update:'Full update',
- self_update:'PUS self-update',
+ self_update:'Quaykeeper self-update',
  check:'Update check',redeploy:'Stack redeploy'};
 /* translate raw log lines into a friendly ongoing-activity line */
 function activityLine(tail){
@@ -1201,10 +1201,10 @@ $('btnMountCheck').onclick=async()=>{
  }catch(e){res.textContent=e.message;res.style.color='var(--err)'}
 };
 $('btnSelfUpdate').onclick=async()=>{
- if(!confirm('Update this app (PUS) now?\n\nRedeploys its own stack - the container will restart and the UI reconnects in a few seconds.'))return;
+ if(!confirm('Update Quaykeeper itself now?\n\nRedeploys its own stack - the container will restart and the UI reconnects in a few seconds.'))return;
  const b=$('btnSelfUpdate');b.dataset.busy='1';
  try{const r=await api('/api/self_update',{method:'POST'});
-  toast('PUS self-update started - run '+r.run_id,'ok',true);
+  toast('Quaykeeper self-update started - run '+r.run_id,'ok',true);
   gateBusyFlag=true;setBusyUI(true);ensureBannerTimer();await refreshRunBanner()}
  catch(e){toast(e.message,'err')}
  finally{delete b.dataset.busy}

@@ -1,6 +1,6 @@
 """Shared fixtures: tmp state dirs + a fake Portainer client.
 
-Every test runs with PUS_DATA_DIR pointed at a fresh tmp dir BEFORE the
+Every test runs with QK_DATA_DIR pointed at a fresh tmp dir BEFORE the
 app modules load (config.py reads the env var at import time), so tests
 never touch the real data/ directory and never see each other's state.
 """
@@ -20,16 +20,16 @@ if str(REPO_ROOT) not in sys.path:
 
 @pytest.fixture()
 def tmp_state(tmp_path, monkeypatch):
-    """Fresh PUS_DATA_DIR + PUS_CONFIG_DIR + reloaded config -> isolated state.
+    """Fresh QK_DATA_DIR + QK_CONFIG_DIR + reloaded config -> isolated state.
 
-    PUS_CONFIG_DIR is critical: without it, the developer's live
+    QK_CONFIG_DIR is critical: without it, the developer's live
     config/config.yaml (with real credentials) would leak into every test.
     """
-    state = tmp_path / "pus-state"
-    conf = tmp_path / "pus-config"
+    state = tmp_path / "qk-state"
+    conf = tmp_path / "qk-config"
     conf.mkdir()
-    monkeypatch.setenv("PUS_DATA_DIR", str(state))
-    monkeypatch.setenv("PUS_CONFIG_DIR", str(conf))
+    monkeypatch.setenv("QK_DATA_DIR", str(state))
+    monkeypatch.setenv("QK_CONFIG_DIR", str(conf))
     # clear cached config so every test starts from defaults
     monkeypatch.setattr("app.config._cfg", None)
     import app.config as cfg
@@ -44,8 +44,8 @@ def tmp_state(tmp_path, monkeypatch):
 def fake_configured(monkeypatch):
     """Make _client_or_error()-style flows see a configured (dummy) Portainer:
     the fake client never actually connects, so the URL can be anything."""
-    monkeypatch.setenv("PUS_PORTAINER_URL", "http://dummy.local:9000")
-    monkeypatch.setenv("PUS_PORTAINER_API_KEY", "ptr_dummy")
+    monkeypatch.setenv("QK_PORTAINER_URL", "http://dummy.local:9000")
+    monkeypatch.setenv("QK_PORTAINER_API_KEY", "ptr_dummy")
     monkeypatch.setattr("app.config._cfg", None)
     import app.config as cfg
     importlib.reload(cfg)

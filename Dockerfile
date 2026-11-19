@@ -1,4 +1,4 @@
-# Portainer Update Service - container image.
+# Quaykeeper - container image.
 # Includes the docker CLI (mounted socket) so prune / Portainer backup /
 # Portainer self-update work inside the container.
 FROM python:3.12-slim

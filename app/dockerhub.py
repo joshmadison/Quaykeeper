@@ -17,7 +17,7 @@ import requests
 
 from .config import get
 
-UA = "portainer-update-service/1.1"
+UA = "quaykeeper/1.2"
 HEADERS_ACCEPT = ", ".join([
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.docker.distribution.manifest.list.v2+json",

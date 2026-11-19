@@ -48,47 +48,63 @@ class TestLoadEnvCoercion:
 
     def test_auth_token_no_stays_string(self, tmp_state, monkeypatch):
         from app import config as cfg
-        monkeypatch.setenv("PUS_AUTH_TOKEN", "no")
+        monkeypatch.setenv("QK_AUTH_TOKEN", "no")
         c = cfg.load(force=True)
         assert c["auth_token"] == "no"  # NOT False (which silently disabled auth)
 
     def test_numeric_key_stays_string(self, tmp_state, monkeypatch):
         from app import config as cfg
-        monkeypatch.setenv("PUS_AUTH_TOKEN", "0123456789")
+        monkeypatch.setenv("QK_AUTH_TOKEN", "0123456789")
         c = cfg.load(force=True)
         assert c["auth_token"] == "0123456789"  # not int 123456789
 
     def test_hash_not_stripped_as_comment(self, tmp_state, monkeypatch):
         from app import config as cfg
-        monkeypatch.setenv("PUS_AUTH_TOKEN", "abc#xyz")
+        monkeypatch.setenv("QK_AUTH_TOKEN", "abc#xyz")
         c = cfg.load(force=True)
         assert c["auth_token"] == "abc#xyz"
 
     def test_int_keys_still_coerce(self, tmp_state, monkeypatch):
         from app import config as cfg
-        monkeypatch.setenv("PUS_LISTEN_PORT", "9090")
+        monkeypatch.setenv("QK_LISTEN_PORT", "9090")
         c = cfg.load(force=True)
         assert c["listen_port"] == 9090
 
     def test_bool_keys_coerce(self, tmp_state, monkeypatch):
         from app import config as cfg
-        monkeypatch.setenv("PUS_TLS_VERIFY", "true")
+        monkeypatch.setenv("QK_TLS_VERIFY", "true")
         c = cfg.load(force=True)
         assert c["tls_verify"] is True
-        monkeypatch.setenv("PUS_TLS_VERIFY", "false")
+        monkeypatch.setenv("QK_TLS_VERIFY", "false")
         c = cfg.load(force=True)
         assert c["tls_verify"] is False
 
     def test_repairs_enabled_env(self, tmp_state, monkeypatch):
         from app import config as cfg
-        monkeypatch.setenv("PUS_REPAIRS_ENABLED", "0")
+        monkeypatch.setenv("QK_REPAIRS_ENABLED", "0")
         c = cfg.load(force=True)
         assert c["repairs"]["enabled"] is False
         assert c["repairs_enabled"] is False
-        monkeypatch.setenv("PUS_REPAIRS_ENABLED", "true")
+        monkeypatch.setenv("QK_REPAIRS_ENABLED", "true")
         c = cfg.load(force=True)
         assert c["repairs_enabled"] is True
 
+
+class TestLegacyEnvPrefix:
+    """Deployments from before the rename still use PUS_* variables."""
+
+    def test_legacy_pus_prefix_still_honoured(self, tmp_state, monkeypatch):
+        from app import config as cfg
+        monkeypatch.setenv("PUS_PORTAINER_URL", "http://legacy.local:9000")
+        c = cfg.load(force=True)
+        assert c["portainer_url"] == "http://legacy.local:9000"
+
+    def test_qk_prefix_wins_over_legacy(self, tmp_state, monkeypatch):
+        from app import config as cfg
+        monkeypatch.setenv("PUS_LISTEN_PORT", "9090")
+        monkeypatch.setenv("QK_LISTEN_PORT", "9191")
+        c = cfg.load(force=True)
+        assert c["listen_port"] == 9191
 
 class TestSaveLoadRoundTrip:
     def test_roundtrip(self, tmp_state):
