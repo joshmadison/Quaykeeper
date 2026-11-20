@@ -53,8 +53,11 @@ every run. Self-hosted — no accounts, no cloud, no telemetry.
 - **Version pinning with real tags.** Pin a service to a specific tag (or move
   it back to `latest`) and the compose file is edited in Portainer and the
   stack redeployed — no copy-pasting YAML.
-- **Cleanup with restraint.** Only unused images and build cache are removed.
-  Stopped containers and their networks stay: they encode your intent.
+- **Cleanup with restraint.** Every run prunes unused images and build cache.
+  The **Cleanup** tab shows what else is lying around — leftover images and
+  networks — and removes exactly what you pick. Rollback images and networks
+  of existing stacks are flagged; stopped containers and volumes are never
+  touched.
 - **A history that answers questions.** Steps, duration, live log, success
   rate and 30-day reclaimed space. Runs that were cut short by a restart are
   marked *interrupted* instead of being counted as failures.
@@ -85,7 +88,7 @@ More options and requirements: **[Installation](docs/installation.md)**.
 | | |
 |---|---|
 | **[Installation](docs/installation.md)** | Requirements, Portainer stack, docker compose, local Python |
-| **[Usage](docs/usage.md)** | How a run works, stacks, version pinning, rollback, history |
+| **[Usage](docs/usage.md)** | How a run works, stacks, version pinning, rollback, cleanup, history |
 | **[Configuration](docs/configuration.md)** | All settings and `QK_*` variables, schedules, updating Portainer itself |
 | **[Security](docs/security.md)** | Auth token, CSRF protection, TLS, what leaves your network |
 | **[API](docs/api.md)** | Every endpoint, for scripts and dashboards |

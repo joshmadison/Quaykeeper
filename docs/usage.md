@@ -58,6 +58,29 @@ button.
   <sub>Pin a version, redeploy one stack, or restore the images from before the last update.</sub>
 </p>
 
+## Cleanup
+
+Every full run already prunes unused images and the build cache. The
+**Cleanup** tab is for everything else that piles up over time — and for
+removing it on your terms:
+
+<p align="center">
+  <img src="screenshots/cleanup.png" alt="Cleanup tab: unused images and networks with checkboxes, rollback and protected markers, and the selection summary" width="100%">
+</p>
+
+- **Unused images**, largest first. An image that is the previous version of a
+  stack is marked *rollback*: removing it means a rollback has to pull it again.
+- **Unused networks.** Networks of stacks that still exist in Portainer are
+  *protected* — the stack needs them to start again. Orphaned compose networks
+  and hand-made ones are safe.
+- **Select all safe** picks everything that is not flagged; the bar shows what
+  the selection frees. Optionally prune the build cache with it.
+- Items are removed one by one and re-checked first: anything that is in use
+  again by then is skipped, and nothing is forced. Each cleanup is a run in the
+  history, with its log.
+- **Stopped containers** and **unused volumes** are listed, never removed:
+  stopped means *intentionally off*, and volumes hold data.
+
 ## History
 
 <p align="center">
