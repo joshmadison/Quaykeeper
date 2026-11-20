@@ -22,7 +22,7 @@ that by default.
    |---|---|---|
    | `QK_LISTEN_HOST` | `0.0.0.0` | Required inside a container |
    | `TZ` | e.g. `Europe/Berlin` | Timezone the schedule refers to |
-   | `QK_AUTH_TOKEN` | e.g. `change-me` | **Recommended** — protects the UI/API |
+   | `QK_AUTH_TOKEN` | a long random string | Protects the UI/API. If unset, one is generated on first start and printed in the container log |
 
 4. **Deploy the stack**, then open `http://<host>:8090`
 5. In **Settings**: enter the Portainer URL, paste the API key, **Test

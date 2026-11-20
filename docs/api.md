@@ -1,5 +1,9 @@
 # API
 
+Every `/api/*` route needs `Authorization: Bearer <token>` once a token is set
+(always the case when Quaykeeper is reachable beyond localhost). `/healthz`
+is public.
+
 Every UI action is an API call, so scripts and dashboards can use it too.
 
 | Method | Path | Description |
@@ -22,7 +26,8 @@ Every UI action is an API call, so scripts and dashboards can use it too.
 | `GET` | `/api/runs/<id>/log` | Full run log (plain text) |
 | `GET` | `/api/history` | Recent runs and 30-day prune stats |
 | `GET` | `/api/versions?image=nginx` | Available tags for an image |
-| `GET` | `/api/endpoints` | Portainer endpoints |
+| `POST` | `/api/endpoints` | Portainer endpoints (`{"portainer_url","portainer_api_key"}` optional; another URL needs its own key) |
+| `POST` | `/api/test` | Test the connection (same body) |
 | `GET`/`POST` | `/api/settings` | Read or change settings |
 | `GET` | `/healthz` | Liveness, scheduler heartbeat and whether a job is running |
 

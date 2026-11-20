@@ -70,7 +70,8 @@ Deploy it as a Portainer stack straight from this repository:
 
 1. **Stacks → Add stack → Repository** — URL `https://github.com/joshmadison/quaykeeper`,
    compose path `docker-compose.yml`
-2. Set `QK_LISTEN_HOST=0.0.0.0`, `TZ` and — recommended — `QK_AUTH_TOKEN`
+2. Set `QK_LISTEN_HOST=0.0.0.0` and `TZ`. Optionally `QK_AUTH_TOKEN` — if you
+   don't, Quaykeeper generates a token on first start and prints it in the log
 3. Deploy, open `http://<host>:8090` and enter your Portainer URL and an admin
    API key in **Settings**
 
