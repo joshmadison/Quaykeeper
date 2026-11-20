@@ -9,7 +9,7 @@ flowchart TD
     C --> D[Prune unused images and build cache]
     D --> E{Updates available?}
     E -- yes --> F[Redeploy changed stacks in parallel]
-    F --> G[Wait for containers to become healthy]
+    F --> G[Wait for Portainer to finish deploying, then for healthy containers]
     E -- no --> H
     G --> H[Verification sweep]
     H --> I[Network integrity repairs]
@@ -18,6 +18,14 @@ flowchart TD
     J -- no --> L([History, live log, reclaimed space])
     K --> L
 ```
+
+Portainer 2.41 and newer deploy stacks in the background: a redeploy request
+only means "accepted". Quaykeeper therefore polls each stack until Portainer
+has finished deploying it, reports Portainer's own error message if the
+deployment fails, and only then checks the containers. If a stack is still
+busy with an earlier deployment (HTTP 409), it waits for that one and then
+sends its own. Before the verification sweep and before Portainer updates
+itself, it waits until no stack is deploying any more.
 
 While a run is active the dashboard shows the current phase, step progress and
 the tail of the log, so you can see what it is doing without leaving the page.

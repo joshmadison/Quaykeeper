@@ -89,6 +89,11 @@ class Portainer:
     def stacks(self):
         return self._req("GET", "/api/stacks").json()
 
+    def stack(self, stack_id, eid=None):
+        """One stack incl. Status (3 = Deploying, 4 = Error on Portainer
+        >= 2.41) and DeploymentStatus[] with the last error message."""
+        return self._req("GET", f"/api/stacks/{stack_id}").json()
+
     def stack_file(self, stack_id, eid):
         r = self._req("GET", f"/api/stacks/{stack_id}/file?endpointId={eid}")
         return r.json().get("StackFileContent") or ""

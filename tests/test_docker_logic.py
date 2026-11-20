@@ -68,22 +68,91 @@ class TestDeploy:
         from app.updater import _soft_deploy_error
         assert _soft_deploy_error(PortainerError(msg)) is soft
 
-    def test_nothing_recreated_is_accepted(self, fake_client, tmp_state, monkeypatch):
-        from app import updater
-        stack = {"Id": 5, "Name": "same", "EndpointId": 3, "Env": [], "GitConfig": None}
-        c = fake_client(stacks=[stack], stack_files={5: "services:\n  a:\n    image: x:1\n"})
-        calls = []
-
-        def ready(client, project, eid, log=None, created_after=None):
-            calls.append(created_after)
-            return (0, 0) if created_after is not None else (1, 1)
-        monkeypatch.setattr(updater, "_containers_ready", ready)
+    @staticmethod
+    def _clock(monkeypatch, updater):
         t = [1000.0]
         monkeypatch.setattr(updater.time, "time", lambda: t[0])
         monkeypatch.setattr(updater.time, "sleep", lambda s: t.__setitem__(0, t[0] + s))
+        return t
+
+    def test_waits_for_async_deploy_before_judging(self, fake_client, tmp_state, monkeypatch):
+        """Portainer >= 2.41: the PUT returns at once, the stack is Status 3
+        while it deploys. Containers must only be judged afterwards - the old
+        code reported 'nothing to recreate' while Portainer was still busy."""
+        from app import updater
+        stack = {"Id": 5, "Name": "app", "EndpointId": 3, "Env": [], "GitConfig": None, "Status": 1}
+        c = fake_client(stacks=[stack], stack_files={5: "services:\n  a:\n    image: x:1\n"})
+        polls = []
+
+        def get_stack(sid, eid=None):
+            polls.append(sid)
+            return {"Status": 3 if len(polls) < 4 else 1}
+        c.stack = get_stack
+        seen = []
+
+        def ready(client, project, eid, log=None, created_after=None):
+            seen.append(len(polls))
+            return (1, 1)
+        monkeypatch.setattr(updater, "_containers_ready", ready)
+        self._clock(monkeypatch, updater)
         logs = []
         assert updater.redeploy_single_stack(c, stack, 3, logs.append) is True
-        assert any("nothing to recreate" in l for l in logs)
+        assert len(polls) >= 4
+        assert seen and min(seen) >= 4  # containers checked only after Deploying ended
+        assert not any("nothing to recreate" in l for l in logs)
+
+    def test_conflict_409_waits_then_resends(self, fake_client, tmp_state, monkeypatch):
+        from app import updater
+        stack = {"Id": 5, "Name": "app", "EndpointId": 3, "Env": [], "GitConfig": None}
+        c = fake_client(stacks=[stack], stack_files={5: "services:\n  a:\n    image: x:1\n"})
+        sends = []
+
+        def update(sid, eid, content, env):
+            sends.append(sid)
+            if len(sends) == 1:
+                raise PortainerError("PUT /api/stacks/5 -> HTTP 409: Stack deployment is already in progress")
+        c.update_stack = update
+        states = iter([3, 3, 1, 1, 1, 1, 1, 1])
+        c.stack = lambda sid, eid=None: {"Status": next(states, 1)}
+        monkeypatch.setattr(updater, "_containers_ready", lambda *a, **k: (1, 1))
+        self._clock(monkeypatch, updater)
+        logs = []
+        assert updater.redeploy_single_stack(c, stack, 3, logs.append) is True
+        assert len(sends) == 2
+        assert not any("[ERROR]" in l for l in logs)
+
+    def test_deploy_error_status_reports_portainer_message(self, fake_client, tmp_state, monkeypatch):
+        from app import updater
+        stack = {"Id": 5, "Name": "app", "EndpointId": 3, "Env": [], "GitConfig": None}
+        c = fake_client(stacks=[stack], stack_files={5: "services:\n  a:\n    image: x:1\n"})
+        c.stack = lambda sid, eid=None: {"Status": 4, "DeploymentStatus": [
+            {"Status": 3, "Message": ""}, {"Status": 4, "Message": "pull access denied for x"}]}
+        monkeypatch.setattr(updater, "_containers_ready", lambda *a, **k: (1, 1))
+        self._clock(monkeypatch, updater)
+        logs = []
+        assert updater.redeploy_single_stack(c, stack, 3, logs.append) is False
+        assert any("pull access denied" in l for l in logs)
+
+    def test_wait_all_deployments(self, fake_client, monkeypatch):
+        from app import updater
+        st = {"Id": 1, "Name": "romm", "EndpointId": 3, "Status": 3}
+        c = fake_client(stacks=[st])
+        t = self._clock(monkeypatch, updater)
+        n = [0]
+        real_stacks = c.stacks
+
+        def stacks():
+            n[0] += 1
+            if n[0] == 3:
+                st["Status"] = 1
+            return real_stacks()
+        c.stacks = stacks
+        logs = []
+        assert updater.wait_all_deployments(c, 3, logs.append) is True
+        assert any("romm" in l for l in logs)
+        st["Status"] = 3
+        n[0] = -1000
+        assert updater.wait_all_deployments(c, 3, logs.append, timeout_s=30) is False
 
 
 class TestSelfDetection:

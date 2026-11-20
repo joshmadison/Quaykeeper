@@ -441,59 +441,143 @@ def redeploy_single_stack(client, stack, eid, log) -> bool:
     # last real "before" state.
     pre = _running_state(client, project, eid, content, env)
 
-    # Containers created from here on belong to this redeploy. Taken BEFORE
-    # the request: Portainer creates them while the PUT is still open
-    # (2s margin - Docker's Created has whole seconds).
-    redeploy_started = time.time() - 2
-    try:
-        if stack.get("GitConfig"):
-            # git-based stack: the StackFileContent PUT would DETACH it from
-            # its repository and redeploy the stale local clone - new commits
-            # would never arrive. git/redeploy re-clones first.
-            pull = not _has_build(content)
-            log(f"[INFO] {name}: git-based stack -> git/redeploy (re-clones the repo"
-                f"{', pulls images' if pull else ''}).")
-            client.redeploy_git_stack(sid, eid, env, pull=pull,
+    git = bool(stack.get("GitConfig"))
+    if git:
+        log(f"[INFO] {name}: git-based stack -> git/redeploy (re-clones the repo"
+            f"{'' if _has_build(content) else ', pulls images'}).")
+
+    def send():
+        if git:
+            # the StackFileContent PUT would DETACH a git stack from its
+            # repository; git/redeploy re-clones first
+            client.redeploy_git_stack(sid, eid, env, pull=not _has_build(content),
                                       git_config=stack.get("GitConfig"))
         else:
             client.update_stack(sid, eid, content, env)
-    except PortainerError as e:
-        if not _soft_deploy_error(e):
-            log(f"[ERROR] Failed to redeploy {name}: {e}")
-            return False
-        # a proxy timeout / 502-504 while Portainer keeps deploying: the
-        # containers decide, not the HTTP answer
-        log(f"[WARN] {name}: no clean answer from Portainer ({str(e)[:120]}) - "
-            f"it may still be deploying, checking the containers.")
-    returned = time.time()
-    log(f"[INFO] {name}: deploy sent, verifying containers...")
+
     deadline = time.time() + int(get("deploy_wait_time", 300))
-    interval = 5
-    expected = n_services
-    last_report = 0.0
-    while time.time() < deadline:
-        ready, total = _containers_ready(client, project, eid, log,
-                                         created_after=redeploy_started)
-        if ready >= expected and ready > 0:
-            log(f"[OK] {name}: all {expected} services ready.")
-            _commit_snapshot(client, name, project, eid, pre, log)
-            _warn_anonymous_volumes(client, name, project, eid, log)
-            return True
-        if total == 0 and time.time() - returned >= 20:
-            # nothing was recreated (no changed image/config): the existing
-            # containers are the result - accept them if they are healthy
-            ready_all, _ = _containers_ready(client, project, eid, log)
-            if ready_all >= expected and ready_all > 0:
-                log(f"[OK] {name}: nothing to recreate, all {expected} services ready.")
-                return True
-        if log and time.time() - last_report >= 30:
-            last_report = time.time()
-            log(f"[INFO] {name}: waiting... {ready}/{expected} new container(s) ready so far")
-        time.sleep(interval)
-    ready, total = _containers_ready(client, project, eid, log,
-                                     created_after=redeploy_started)
-    log(f"[ERROR] {name}: only {ready}/{expected} services ready after wait ({total} containers).")
+    if not _send_deploy(client, sid, eid, name, send, deadline, log):
+        return False
+    log(f"[INFO] {name}: deploy accepted, waiting for Portainer to finish...")
+    # Portainer >= 2.41 deploys in the background: a 200 only means
+    # 'accepted'. Wait until the stack leaves 'Deploying' (Status 3) - only
+    # then do the containers show the result. Older Portainer deploys
+    # synchronously and never reports 3, so this returns at once.
+    ok, msg = _wait_deployed(client, sid, eid, deadline, log, name)
+    if not ok:
+        log(f"[ERROR] {name}: deployment failed: {msg}")
+        return False
+    ready, total = _wait_ready(client, project, eid, n_services, deadline, log, name)
+    if ready >= n_services and ready > 0:
+        log(f"[OK] {name}: all {n_services} services ready.")
+        _commit_snapshot(client, name, project, eid, pre, log)
+        _warn_anonymous_volumes(client, name, project, eid, log)
+        return True
+    log(f"[ERROR] {name}: only {ready}/{n_services} services ready after wait ({total} containers).")
     return False
+
+
+DEPLOYING, DEPLOY_ERROR = 3, 4  # Portainer stack Status (>= 2.41)
+
+
+def _in_progress_409(e) -> bool:
+    return "409" in str(e) and "in progress" in str(e).lower()
+
+
+def _send_deploy(client, sid, eid, name, send, deadline, log) -> bool:
+    """Send one deploy request. A 409 'deployment already in progress' means
+    Portainer is still busy with this stack (an earlier run, a click in the
+    Portainer UI): wait for that deployment to end, then send ours once."""
+    try:
+        send()
+        return True
+    except PortainerError as e:
+        if _in_progress_409(e):
+            log(f"[INFO] {name}: Portainer is still deploying this stack - waiting for it to finish.")
+            ok, msg = _wait_deployed(client, sid, eid, deadline, log, name)
+            if not ok and msg.startswith("still deploying"):
+                log(f"[ERROR] {name}: {msg}")
+                return False
+            try:
+                send()
+                return True
+            except PortainerError as e2:
+                e = e2
+        if _soft_deploy_error(e):
+            # proxy timeout / 502-504: Portainer may have accepted it anyway
+            log(f"[WARN] {name}: no clean answer from Portainer ({str(e)[:120]}) - "
+                f"checking the stack instead.")
+            return True
+        log(f"[ERROR] Failed to redeploy {name}: {e}")
+        return False
+
+
+def _wait_deployed(client, sid, eid, deadline, log, name) -> tuple:
+    """Poll the stack until it is no longer 'Deploying'. (ok, message)."""
+    last_report = time.time()
+    while True:
+        getter = getattr(client, "stack", None)
+        if getter is None:
+            return True, ""  # client without status support: nothing to wait for
+        try:
+            st = getter(sid, eid) or {}
+            if not isinstance(st, dict):
+                return True, ""
+        except PortainerError as e:
+            if time.time() >= deadline:
+                return False, f"stack status unavailable ({e})"
+            time.sleep(3)
+            continue
+        status = st.get("Status")
+        if status == DEPLOY_ERROR:
+            hist = st.get("DeploymentStatus") or []
+            msg = (hist[-1] or {}).get("Message") if hist else ""
+            return False, msg or "Portainer reported a deployment error"
+        if status != DEPLOYING:
+            return True, ""
+        if time.time() >= deadline:
+            return False, "still deploying when the wait time ran out"
+        if time.time() - last_report >= 30:
+            last_report = time.time()
+            log(f"[INFO] {name}: Portainer is still deploying...")
+        time.sleep(3)
+
+
+def _wait_ready(client, project, eid, expected, deadline, log, name) -> tuple:
+    """After the deployment finished: wait until the stack's containers are
+    up and healthy (healthchecks can take a while after start)."""
+    last_report = 0.0
+    while True:
+        ready, total = _containers_ready(client, project, eid, log)
+        if (ready >= expected and ready > 0) or time.time() >= deadline:
+            return ready, total
+        if time.time() - last_report >= 30:
+            last_report = time.time()
+            log(f"[INFO] {name}: waiting for containers... {ready}/{expected} ready")
+        time.sleep(5)
+
+
+def wait_all_deployments(client, eid, log, timeout_s=600) -> bool:
+    """Wait until no stack is 'Deploying' - before the sweep and before
+    Portainer updates itself (a restart would cut running deployments)."""
+    deadline = time.time() + timeout_s
+    reported = False
+    while True:
+        try:
+            busy = [s.get("Name") for s in client.stacks()
+                    if isinstance(s, dict) and s.get("EndpointId") in (None, eid)
+                    and s.get("Status") == DEPLOYING]
+        except (PortainerError, AttributeError, TypeError):
+            return True  # can't tell - don't block the run on it
+        if not busy:
+            return True
+        if time.time() >= deadline:
+            log(f"[WARN] still deploying after {timeout_s}s: {', '.join(busy)}")
+            return False
+        if not reported:
+            log(f"[INFO] waiting for Portainer to finish deploying: {', '.join(busy)}")
+            reported = True
+        time.sleep(5)
 
 
 def _warn_anonymous_volumes(client, name, project, eid, log) -> None:
@@ -770,17 +854,21 @@ def rollback_stack(runlog, stack_name: str, target_images: dict) -> bool:
                        "previous version via 'Version' in the stack view, or "
                        "revert the repo commit.")
             return False
-        rollback_started = time.time() - 2  # before the PUT (see redeploy)
-        client.update_stack(sid, eid, content, env)  # always persist the edit
     except PortainerError as e:
-        if not _soft_deploy_error(e):
-            runlog.log(f"[ERROR] Rollback deploy failed: {e}")
-            return False
-        runlog.log(f"[WARN] no clean answer from Portainer ({str(e)[:120]}) - "
-                   f"checking the containers.")
+        runlog.log(f"[ERROR] Rollback failed: {e}")
+        return False
+    deadline = time.time() + int(get("deploy_wait_time", 300))
+    name = stack.get("Name") or stack_name
+    if not _send_deploy(client, sid, eid, name,
+                        lambda: client.update_stack(sid, eid, content, env),
+                        deadline, runlog.log):
+        return False
 
-    # wait for the rolled-back containers (created after now) - but a fully
-    # stopped stack stays stopped (user intent); the file edit is persisted.
+    # a fully stopped stack stays stopped (user intent); the edit is saved
+    ok, msg = _wait_deployed(client, sid, eid, deadline, runlog.log, name)
+    if not ok:
+        runlog.log(f"[ERROR] Rollback deployment failed: {msg}")
+        return False
     try:
         cs = client.containers_by_project(project, eid)
         if cs and not any(c.get("State") == "running" for c in cs):
@@ -790,21 +878,13 @@ def rollback_stack(runlog, stack_name: str, target_images: dict) -> bool:
             return True
     except PortainerError:
         pass
-
-    log2 = runlog.log
-    log2("[INFO] Rollback deployed, verifying containers...")
-    deadline = time.time() + int(get("deploy_wait_time", 300))
+    runlog.log("[INFO] Rollback deployed, verifying containers...")
     expected = _expected_services(content, env)
     expected = expected if expected and expected > 0 else 1  # lenient on parse error
-    while time.time() < deadline:
-        ready, total = _containers_ready(client, project, eid, log2,
-                                         created_after=rollback_started)
-        if ready >= expected and ready > 0:
-            runlog.log("[OK] Rollback complete - stack restored to snapshot "
-                       "state.")
-            return True
-        runlog.log(f"[INFO] waiting... {ready}/{expected} new container(s) ready")
-        time.sleep(5)
+    ready, _total = _wait_ready(client, project, eid, expected, deadline, runlog.log, name)
+    if ready >= expected and ready > 0:
+        runlog.log("[OK] Rollback complete - stack restored to snapshot state.")
+        return True
     runlog.log("[ERROR] Rollback did not become healthy within the wait "
                "window - check the stack manually.")
     return False
@@ -1355,6 +1435,9 @@ def run_full_update(runlog) -> bool:
 
     ok_stacks, failed, excluded = redeploy_stacks(client, eid, stacks, runlog.log)
     runlog.step("redeploy_stacks", ok_stacks, f"failed: {', '.join(failed)}" if failed else "")
+    # Portainer >= 2.41 deploys in the background: never judge a stack (or
+    # restart Portainer) while a deployment is still running
+    wait_all_deployments(client, eid, runlog.log)
     ok_sweep = reconciliation_sweep(client, eid, stacks, runlog.log)
     runlog.step("reconciliation_sweep", ok_sweep)
     ok_repairs = post_deployment_repairs(client, eid, runlog.log)
@@ -1362,6 +1445,8 @@ def run_full_update(runlog) -> bool:
     # Portainer self-update LAST: restarting the API mid-run would blind
     # the sweep. After a self-update, WAIT for the API to come back so a
     # follow-up check/sweep doesn't run against a restarting Portainer.
+    if get("include_portainer", False):
+        wait_all_deployments(client, eid, runlog.log)
     ok_port = update_portainer(client, eid, runlog.log)
     runlog.step("update_portainer", ok_port)
     if ok_port and get("include_portainer", False):

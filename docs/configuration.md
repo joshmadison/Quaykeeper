@@ -40,7 +40,8 @@ wins.
 
 **Schedule mode** offers `interval` (every N hours), `daily` and `weekly` (at
 `HH:MM` in the container's timezone). **Deploy wait time** caps how long each
-redeploy waits for its containers to report healthy. Everything is validated
+redeploy waits for Portainer to finish deploying and for its containers to
+report healthy. Everything is validated
 before it is saved — and if an environment variable exists for a key, it wins.
 
 ## Updating Portainer itself (optional)

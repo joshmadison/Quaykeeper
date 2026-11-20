@@ -87,6 +87,12 @@ def fake_client():
         def stack_file(self, stack_id, eid=None):
             return self.stack_files.get(stack_id, "")
 
+        def stack(self, stack_id, eid=None):
+            for st in self.stacks_list:
+                if st.get("Id") == stack_id:
+                    return st
+            return {}
+
         def status(self):
             return {"Version": "2.45.1", "InstanceID": "x"}
 
