@@ -51,6 +51,8 @@ class FakeDocker:
         self.removed.append(iid)
 
     def remove_network(self, nid, eid=None): self.removed.append(nid)
+    def remove_volume(self, name, eid=None): self.removed.append(name)
+    def remove_container(self, cid, eid=None): self.removed.append(cid)
     def prune_build_cache(self, eid=None): return {"SpaceReclaimed": 20 * MB}
 
 
@@ -129,9 +131,16 @@ class TestApi:
     def test_post_runs_and_records_history(self, client):
         from app import history
         r = client.post("/api/cleanup", json={"images": ["sha256:old"]})
-        assert r.status_code == 200 and r.get_json()["ok"] is True
+        assert r.status_code == 200 and r.get_json()["started"] is True
+        from app.jobs import gate
+        import time
+        for _ in range(200):
+            if not gate.is_busy():
+                break
+            time.sleep(0.01)
         assert self.docker.removed == ["ghcr.io/x/app:1.0"]
         assert history.history()[-1]["kind"] == "cleanup"
+        assert history.history()[-1]["success"] is True
 
     def test_post_busy(self, client):
         from app.jobs import gate
@@ -207,3 +216,70 @@ class TestReviewRules:
         assert cleanup_docker(d, 3, lambda m: None) in (True, False)
         assert "redis:7.2" not in d.removed            # rollback target kept
         assert "ghcr.io/x/app:1.0" in d.removed
+
+
+ANON = "a" * 64
+
+
+class TestVolumesContainersHints:
+    def _docker(self):
+        import time as _t
+        d = FakeDocker()
+        d.cs.append({"Id": "c3", "Names": ["/old-migration"], "Image": "alpine",
+                     "ImageID": "sha256:alp", "State": "exited",
+                     "Created": _t.time() - 90 * 86400, "Labels": {}})
+        d.cs.append({"Id": "c4", "Names": ["/fresh-test"], "Image": "alpine",
+                     "ImageID": "sha256:alp", "State": "exited",
+                     "Created": _t.time() - 86400, "Labels": {}})
+        d.cs.append({"Id": "c5", "Names": ["/nextcloud-aio-borgbackup"], "Image": "aio",
+                     "ImageID": "sha256:aio", "State": "exited",
+                     "Created": _t.time() - 90 * 86400, "Labels": {}})
+        d.cs[0]["Mounts"].append({"Type": "volume", "Name": "b" * 64, "Destination": "/cache"})
+        d.volumes = lambda eid=None: [
+            {"Name": "web_data"}, {"Name": ANON},
+            {"Name": "media_config", "Labels": {"com.docker.compose.project": "media"}},
+            {"Name": "nc_office"}]
+        d.system_df = lambda eid=None: {
+            "Volumes": [{"Name": ANON, "UsageData": {"Size": 2 * MB}}],
+            "Images": [{"Size": 100 * MB}], "Containers": [{"SizeRw": MB}],
+            "BuildCache": [{"Size": 20 * MB, "InUse": False}]}
+        d.inspect_container = lambda cid, eid=None: {"HostConfig": {"LogConfig": {
+            "Type": "json-file", "Config": {}}}}
+        return d
+
+    def test_volume_rules(self, tmp_state):
+        from app.cleanup import analyze
+        by = {v["name"]: v for v in analyze(self._docker(), 3)["volumes"]}
+        assert set(by) == {ANON, "media_config", "nc_office"}     # web_data in use
+        assert by[ANON]["safe"] and by[ANON]["size_mb"] == 2.0
+        assert not by["media_config"]["safe"]                       # stack exists
+        assert not by["nc_office"]["safe"]                          # named = data
+
+    def test_one_off_containers(self, tmp_state):
+        from app.cleanup import analyze
+        by = {c["name"]: c for c in analyze(self._docker(), 3)["containers"]}
+        assert "jelly" not in by                       # part of a stack: never offered
+        assert by["old-migration"]["safe"] is True
+        assert by["fresh-test"]["safe"] is False
+        assert by["nextcloud-aio-borgbackup"]["safe"] is False
+
+    def test_usage_and_safe_total(self, tmp_state):
+        from app.cleanup import analyze
+        a = analyze(self._docker(), 3)
+        assert a["usage"]["total_mb"] == 123.0
+        # safe images (old 300 + dangling 10 + busy 5) + anon vol 2 + cache 20
+        assert a["safe_total_mb"] == 337.0
+
+    def test_hints(self, tmp_state):
+        from app.cleanup import analyze
+        kinds = {h["kind"]: h for h in analyze(self._docker(), 3)["hints"]}
+        assert kinds["anon_volume"]["path"] == "/cache"
+        assert "max-size" in kinds["log_limit"]["fix"]
+
+    def test_remove_volumes_and_containers(self, tmp_state):
+        from app.cleanup import run_cleanup
+        d, logs = self._docker(), []
+        ok = run_cleanup(d, 3, [], [], False, logs.append,
+                         volume_names=[ANON, "web_data"], container_ids=["c3", "c2"])
+        assert ok is True
+        assert d.removed == ["c3", ANON]               # in-use / stack items skipped

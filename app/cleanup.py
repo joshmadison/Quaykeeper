@@ -1,15 +1,19 @@
 """Docker leftovers: what is unused, and what is safe to remove.
 
-analyze() builds the Cleanup tab: unused images, unused networks, stopped
-containers, unused volumes and build cache - each item flagged with
-whether removing it is safe. run_cleanup() removes exactly the items the
-user picked, one by one, after re-checking that each is still unused.
+analyze() builds the Cleanup tab. Every item carries `safe`:
+- safe   - nothing of value is lost: unused images that no rollback needs,
+           anonymous volumes nothing uses, orphaned networks, one-off
+           containers that ended long ago, build cache
+- kept   - shown with the reason, removable only on purpose: rollback
+           images, named volumes (they hold data), networks/volumes of
+           stacks that still exist
+Containers that belong to a stack are never removable here: 'stopped'
+means 'intentionally off'.
 
-Deliberately NOT removable from here:
-- stopped containers: 'stopped' means 'intentionally off' (see updater)
-- volumes: they hold data
-Both are listed so the user sees them, nothing more.
+run_cleanup() removes exactly the picked items, one by one and without
+force, after re-checking that each is still unused.
 """
+import re
 import time
 
 from .portainer import PortainerError
@@ -24,6 +28,11 @@ SYSTEM_NETWORKS = {"ingress", "docker_gwbridge"}
 # hold host-specific settings (parent interface, subnet) that are hard to
 # recreate - removable only on purpose
 SPECIAL_DRIVERS = {"macvlan", "ipvlan"}
+# a one-off container (no stack) that ended longer ago than this is safe
+ONE_OFF_AGE_DAYS = 30
+# containers managed by another tool that starts/stops them itself
+MANAGED_PREFIXES = ("nextcloud-aio-", "portainer")
+ANON_VOLUME = re.compile(r"^[0-9a-f]{64}$")
 
 
 def network_ids_in_use(containers) -> tuple:
@@ -137,9 +146,10 @@ def _known_projects(client, eid, containers) -> set:
 
 
 # ------------------------------------------------------------------ analyze
-def analyze(client, eid, networks: bool = True) -> dict:
+def analyze(client, eid, networks: bool = True, details: bool = True) -> dict:
     """Everything the Cleanup tab shows. Read-only.
-    networks=False: images only (used by the automatic prune of a run)."""
+    networks=False: images only (the automatic prune of an update run).
+    details=False: skip disk usage and tips (re-check before removing)."""
     imgs = client.images(eid)
     cs = client.all_containers(eid)
     nets = client.networks(eid) if networks else []
@@ -195,42 +205,187 @@ def analyze(client, eid, networks: bool = True) -> dict:
 
     stopped = [{
         "id": c.get("Id"),
-        "name": ((c.get("Names") or ["?"])[0] or "?").lstrip("/"),
+        "name": _cname(c),
         "image": c.get("Image"),
         "project": (c.get("Labels") or {}).get(PROJECT_LABEL),
         "state": c.get("State"),
         "status": c.get("Status"),
     } for c in cs if c.get("State") != "running"]
 
-    volumes = None
-    try:
-        in_use = {m.get("Name") for c in cs for m in (c.get("Mounts") or [])
-                  if m.get("Type") == "volume"}
-        volumes = [{
-            "name": v.get("Name"),
-            "driver": v.get("Driver"),
-            "project": (v.get("Labels") or {}).get(PROJECT_LABEL),
-            "created": v.get("CreatedAt"),
-        } for v in client.volumes(eid) if v.get("Name") not in in_use]
-    except (PortainerError, AttributeError):
-        pass
+    df = {}
+    if networks and details:
+        try:
+            df = client.system_df(eid) or {}
+        except (PortainerError, AttributeError):
+            df = {}
+
+    containers = _old_containers(cs) if networks else []
+    volumes = _volumes(client, eid, cs, projects, df) if networks else []
 
     build_cache_mb = None
     try:
-        build_cache_mb = round(sum((b.get("Size") or 0) for b in client.build_cache(eid)
+        recs = df.get("BuildCache")
+        if recs is None:
+            recs = client.build_cache(eid)
+        build_cache_mb = round(sum((b.get("Size") or 0) for b in recs or []
                                    if not b.get("InUse")) / MB, 1)
     except (PortainerError, AttributeError):
         pass
 
+    hints = _hints(client, eid, cs) if networks and details else []
+    usage = _usage(df)
+    safe_mb = (sum(i["size_mb"] for i in images if i["safe"])
+               + sum(v["size_mb"] or 0 for v in volumes or [] if v["safe"])
+               + sum(c["size_mb"] or 0 for c in containers if c["safe"])
+               + (build_cache_mb or 0))
+
     return {
         "images": images,
         "networks": networks,
-        "stopped_containers": stopped,
         "volumes": volumes,
+        "containers": containers,
+        "stopped_containers": stopped,
         "build_cache_mb": build_cache_mb,
         "safe_images_mb": round(sum(i["size_mb"] for i in images if i["safe"]), 1),
+        "safe_total_mb": round(safe_mb, 1),
+        "usage": usage,
+        "hints": hints,
         "analyzed_at": time.time(),
     }
+
+
+def _cname(c) -> str:
+    return ((c.get("Names") or ["?"])[0] or "?").lstrip("/")
+
+
+def _old_containers(cs) -> list:
+    """Stopped containers that belong to no stack. Safe when they ended a
+    while ago (typical 'docker run' without --rm); containers managed by
+    another tool (Nextcloud AIO, Portainer) are kept."""
+    out = []
+    now = time.time()
+    for c in cs:
+        if c.get("State") == "running" or c.get("State") == "restarting":
+            continue
+        labels = c.get("Labels") or {}
+        if labels.get(PROJECT_LABEL) or labels.get("com.docker.stack.namespace"):
+            continue  # part of a stack: stopped on purpose
+        name = _cname(c)
+        age_days = (now - (c.get("Created") or now)) / 86400
+        managed = name.startswith(MANAGED_PREFIXES)
+        safe = not managed and age_days >= ONE_OFF_AGE_DAYS
+        out.append({
+            "id": c.get("Id"),
+            "name": name,
+            "image": c.get("Image"),
+            "status": c.get("Status"),
+            "created": c.get("Created"),
+            "size_mb": round((c.get("SizeRw") or 0) / MB, 1) or None,
+            "safe": safe,
+            "note": ("managed by " + ("Nextcloud AIO" if name.startswith("nextcloud-aio-")
+                                      else "Portainer")) if managed else
+                    ("" if safe else f"stopped less than {ONE_OFF_AGE_DAYS} days ago"),
+        })
+    out.sort(key=lambda x: (not x["safe"], x["name"]))
+    return out
+
+
+def _volumes(client, eid, cs, projects, df) -> list:
+    """Unused volumes. Anonymous ones (64-hex name, created for an image's
+    VOLUME path) are safe; named ones hold data on purpose and are kept."""
+    try:
+        vols = client.volumes(eid)
+    except (PortainerError, AttributeError):
+        return []
+    in_use = {m.get("Name") for c in cs for m in (c.get("Mounts") or [])
+              if m.get("Type") == "volume"}
+    sizes = {v.get("Name"): (v.get("UsageData") or {}).get("Size")
+             for v in (df.get("Volumes") or [])}
+    out = []
+    for v in vols:
+        name = v.get("Name") or ""
+        if not name or name in in_use:
+            continue
+        labels = v.get("Labels") or {}
+        project = (labels.get(PROJECT_LABEL) or "").lower()
+        anon = bool(ANON_VOLUME.match(name)) or "com.docker.volume.anonymous" in labels
+        size = sizes.get(name)
+        if anon:
+            note = ""
+        elif project and project in projects:
+            note = f"data of stack '{project}' - kept"
+        else:
+            note = "named volume - may hold data"
+        out.append({
+            "name": name,
+            "anonymous": anon,
+            "project": project or None,
+            "created": v.get("CreatedAt"),
+            "size_mb": round(size / MB, 1) if isinstance(size, (int, float)) and size >= 0 else None,
+            "safe": anon,
+            "note": note,
+        })
+    out.sort(key=lambda x: (not x["safe"], -(x["size_mb"] or 0), x["name"]))
+    return out
+
+
+def _usage(df) -> dict:
+    """Total Docker disk usage by category, in MB (None if unknown)."""
+    if not df:
+        return {}
+    def mb(n): return round((n or 0) / MB, 1)
+    images = sum(i.get("Size") or 0 for i in df.get("Images") or [])
+    containers = sum(c.get("SizeRw") or 0 for c in df.get("Containers") or [])
+    volumes = sum(max(0, (v.get("UsageData") or {}).get("Size") or 0)
+                  for v in df.get("Volumes") or [])
+    cache = sum(b.get("Size") or 0 for b in df.get("BuildCache") or [])
+    return {"images_mb": mb(images), "containers_mb": mb(containers),
+            "volumes_mb": mb(volumes), "build_cache_mb": mb(cache),
+            "total_mb": mb(images + containers + volumes + cache)}
+
+
+def anonymous_mounts(containers) -> list:
+    """[(container name, project, path)] for every anonymous volume a
+    container mounts - each recreate (update) leaves such a volume behind."""
+    out = []
+    for c in containers or []:
+        for m in c.get("Mounts") or []:
+            if m.get("Type") == "volume" and ANON_VOLUME.match(m.get("Name") or ""):
+                out.append((_cname(c), (c.get("Labels") or {}).get(PROJECT_LABEL),
+                            m.get("Destination")))
+    return out
+
+
+def _hints(client, eid, cs) -> list:
+    """Short, actionable tips: what keeps creating leftovers or eats disk."""
+    hints = []
+    for name, project, path in anonymous_mounts([c for c in cs if c.get("State") == "running"]):
+        hints.append({
+            "kind": "anon_volume", "container": name, "stack": project, "path": path,
+            "text": f"{name} keeps {path} in an anonymous volume - every update "
+                    f"leaves one behind.",
+            "fix": f"volumes:\n  - {re.sub(r'[^a-z0-9_]+', '_', (name + path).lower()).strip('_')}:{path}",
+        })
+    no_limit = []
+    for c in cs:
+        if c.get("State") != "running":
+            continue
+        try:
+            hc = (client.inspect_container(c["Id"], eid) or {}).get("HostConfig") or {}
+        except (PortainerError, AttributeError, KeyError):
+            continue
+        lc = hc.get("LogConfig") or {}
+        if (lc.get("Type") or "json-file") == "json-file" and \
+                not (lc.get("Config") or {}).get("max-size"):
+            no_limit.append(_cname(c))
+    if no_limit:
+        hints.append({
+            "kind": "log_limit", "containers": sorted(no_limit),
+            "text": f"{len(no_limit)} container(s) keep their logs without a size "
+                    f"limit - they grow forever.",
+            "fix": 'logging:\n  options:\n    max-size: "10m"\n    max-file: "3"',
+        })
+    return hints
 
 
 # ---------------------------------------------------------------- run
@@ -247,42 +402,52 @@ def remove_image(client, eid, img) -> None:
         client.remove_image(tag, eid)
 
 
-def run_cleanup(client, eid, image_ids, network_ids, build_cache, log) -> bool:
+def run_cleanup(client, eid, image_ids, network_ids, build_cache, log,
+                volume_names=(), container_ids=()) -> bool:
     """Remove exactly the picked items. Every id is re-checked against a
     fresh analyze(): anything that got used again (or vanished) since the
     user looked is skipped, never forced. Returns True if nothing failed."""
-    current = analyze(client, eid, networks=bool(network_ids))
+    current = analyze(client, eid, networks=bool(network_ids or volume_names
+                                                 or container_ids), details=False)
     imgs = {i["id"]: i for i in current["images"]}
     nets = {n["id"]: n for n in current["networks"]}
+    vols = {v["name"]: v for v in current["volumes"] or []}
+    ctrs = {c["id"]: c for c in current["containers"]}
     failed = 0
-    removed_imgs, freed = 0, 0.0
+    count = {"image": 0, "network": 0, "volume": 0, "container": 0}
+    freed = 0.0
+
+    def attempt(kind, key, item, label, fn, mb=0.0):
+        nonlocal failed, freed
+        if not item:
+            log(f"[INFO] {kind} {label}: no longer unused - skipped")
+            return
+        try:
+            fn()
+            count[kind] += 1
+            freed += mb or 0
+            log(f"[OK] removed {kind} {label}" + (f" ({mb} MB)" if mb else ""))
+        except PortainerError as e:
+            failed += 1
+            log(f"[WARN] {kind} {label}: {e}")
+
+    # containers first: a removed one-off container may free its image
+    for cid in container_ids:
+        c = ctrs.get(cid)
+        attempt("container", cid, c, (c or {}).get("name") or cid[:12],
+                lambda: client.remove_container(cid, eid), (c or {}).get("size_mb"))
     for iid in image_ids:
         img = imgs.get(iid)
-        label = (img and (img["tags"] or [iid[:19]])[0]) or iid[:19]
-        if not img:
-            log(f"[INFO] image {label}: no longer unused - skipped")
-            continue
-        try:
-            remove_image(client, eid, img)
-            removed_imgs += 1
-            freed += img["size_mb"]
-            log(f"[OK] removed image {label} ({img['size_mb']} MB)")
-        except PortainerError as e:
-            failed += 1
-            log(f"[WARN] image {label}: {e}")
-    removed_nets = 0
+        attempt("image", iid, img, ((img or {}).get("tags") or [iid[:19]])[0],
+                lambda: remove_image(client, eid, img), (img or {}).get("size_mb"))
+    for name in volume_names:
+        v = vols.get(name)
+        attempt("volume", name, v, name[:24] + ("…" if len(name) > 24 else ""),
+                lambda: client.remove_volume(name, eid), (v or {}).get("size_mb"))
     for nid in network_ids:
-        net = nets.get(nid)
-        if not net:
-            log(f"[INFO] network {nid[:12]}: no longer unused - skipped")
-            continue
-        try:
-            client.remove_network(nid, eid)
-            removed_nets += 1
-            log(f"[OK] removed network {net['name']}")
-        except PortainerError as e:
-            failed += 1
-            log(f"[WARN] network {net['name']}: {e}")
+        n = nets.get(nid)
+        attempt("network", nid, n, (n or {}).get("name") or nid[:12],
+                lambda: client.remove_network(nid, eid))
     cache_mb = 0
     if build_cache:
         try:
@@ -293,12 +458,13 @@ def run_cleanup(client, eid, image_ids, network_ids, build_cache, log) -> bool:
             failed += 1
             log(f"[WARN] build cache prune failed: {e}")
     total = int(freed) + cache_mb
-    log(f"Cleanup done: {removed_imgs} image(s), {removed_nets} network(s), "
-        f"~{total} MB freed" + (f", {failed} failed" if failed else "") + ".")
-    if removed_imgs or cache_mb:
+    parts = [f"{n} {k}(s)" for k, n in count.items() if n]
+    log(f"Cleanup done: {', '.join(parts) or 'nothing removed'}, ~{total} MB freed"
+        + (f", {failed} failed" if failed else "") + ".")
+    if total or count["image"]:
         try:
             from .history import record_prune_stats
-            record_prune_stats(reclaimed_mb=total, images_deleted=removed_imgs)
+            record_prune_stats(reclaimed_mb=total, images_deleted=count["image"])
         except Exception:  # noqa: BLE001 - stats must never fail the run
             pass
     return failed == 0

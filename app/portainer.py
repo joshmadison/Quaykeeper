@@ -181,6 +181,18 @@ class Portainer:
     def remove_network(self, network_id, eid=None):
         return self._docker("DELETE", f"/networks/{quote(network_id, safe='')}", eid)
 
+    def remove_volume(self, name, eid=None):
+        """Remove ONE volume (no force: Docker refuses one still in use)."""
+        return self._docker("DELETE", f"/volumes/{quote(name, safe='')}", eid)
+
+    def remove_container(self, cid, eid=None):
+        """Remove ONE stopped container, keeping its volumes (v=false)."""
+        return self._docker("DELETE", f"/containers/{quote(cid, safe='')}?v=false", eid)
+
+    def system_df(self, eid=None):
+        """Disk usage per images/containers/volumes/build cache."""
+        return self._docker("GET", "/system/df", eid, timeout=120).json()
+
     def volumes(self, eid=None):
         return self._docker("GET", "/volumes", eid).json().get("Volumes") or []
 

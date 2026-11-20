@@ -477,6 +477,7 @@ def redeploy_single_stack(client, stack, eid, log) -> bool:
         if ready >= expected and ready > 0:
             log(f"[OK] {name}: all {expected} services ready.")
             _commit_snapshot(client, name, project, eid, pre, log)
+            _warn_anonymous_volumes(client, name, project, eid, log)
             return True
         if total == 0 and time.time() - returned >= 20:
             # nothing was recreated (no changed image/config): the existing
@@ -493,6 +494,18 @@ def redeploy_single_stack(client, stack, eid, log) -> bool:
                                      created_after=redeploy_started)
     log(f"[ERROR] {name}: only {ready}/{expected} services ready after wait ({total} containers).")
     return False
+
+
+def _warn_anonymous_volumes(client, name, project, eid, log) -> None:
+    """A recreated container with an anonymous volume leaves the old one
+    behind on every update - say which path needs a named volume."""
+    try:
+        from .cleanup import anonymous_mounts
+        for cname, _proj, path in anonymous_mounts(client.containers_by_project(project, eid)):
+            log(f"[WARN] {name}: {cname} keeps {path} in an anonymous volume - each "
+                f"update leaves one behind. Give it a named volume in the compose file.")
+    except Exception:  # noqa: BLE001 - a hint must never fail a deploy
+        pass
 
 
 def _soft_deploy_error(e) -> bool:

@@ -728,21 +728,23 @@ def api_cleanup_get():
 @app.route("/api/cleanup", methods=["POST"])
 def api_cleanup_post():
     """Remove the picked items: {"images": [ids], "networks": [ids],
-    "build_cache": bool}. Recorded as a 'cleanup' run in the history."""
+    "volumes": [names], "containers": [ids], "build_cache": bool}.
+    Recorded as a 'cleanup' run in the history."""
     body = request.get_json(silent=True) or {}
 
     def ids(key):
         v = body.get(key) or []
-        if not isinstance(v, list) or len(v) > 500 or \
-                not all(isinstance(x, str) and 0 < len(x) <= 128 for x in v):
+        if not isinstance(v, list) or len(v) > 5000 or \
+                not all(isinstance(x, str) and 0 < len(x) <= 255 for x in v):
             raise ValueError(key)
         return list(dict.fromkeys(v))
     try:
         image_ids, network_ids = ids("images"), ids("networks")
+        volume_names, container_ids = ids("volumes"), ids("containers")
     except ValueError as bad:
         return _err(f"'{bad}' must be a list of ids", 400)
     build_cache = bool(body.get("build_cache"))
-    if not (image_ids or network_ids or build_cache):
+    if not (image_ids or network_ids or volume_names or container_ids or build_cache):
         return _err("nothing selected", 400)
     client, e = _client_or_error()
     if e:
@@ -753,13 +755,15 @@ def api_cleanup_post():
     def work(rl):
         try:
             ok = cleanup.run_cleanup(client, eid, image_ids, network_ids,
-                                     build_cache, rl.log)
+                                     build_cache, rl.log, volume_names=volume_names,
+                                     container_ids=container_ids)
         except PortainerError as err:
             rl.log(f"[ERROR] {err}")
             ok = False
         rl.step("cleanup", ok)
         return ok
-    return _job("cleanup", "cleanup", work, background=False)
+    # background: removing hundreds of volumes takes a while
+    return _job("cleanup", "cleanup", work, background=True)
 
 
 # ------------------------------------------------------------------ settings
