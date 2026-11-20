@@ -29,14 +29,20 @@ class Portainer:
         # tls_verify=true + tls_ca_file set -> verify against that CA (the
         # way to make verification work with a self-signed Portainer cert:
         # mount the cert and point tls_ca_file at it).
-        self.session.verify = tls_ca_file if tls_verify else False
+        # verify=None (tls_verify on, no CA file) used to mean NO verification
+        # in requests; True = system CA bundle, a path = that CA.
+        self._verify = (tls_ca_file or True) if tls_verify else False
+        self.session.verify = self._verify
         self.endpoint_id = endpoint_id
 
     # ------------------------------------------------------------------ HTTP
     def _req(self, method, path, **kw):
         timeout = kw.pop("timeout", 30)
         try:
-            r = self.session.request(method, self.base + path, timeout=timeout, **kw)
+            # verify passed per request: REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE in
+            # the environment would otherwise override the session setting
+            r = self.session.request(method, self.base + path, timeout=timeout,
+                                     verify=self._verify, **kw)
         except requests.RequestException as e:
             msg = str(e)
             if isinstance(e, requests.exceptions.SSLError) or "SSLError" in msg \

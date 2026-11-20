@@ -6,9 +6,13 @@
 # Or leave both empty and finish setup in the web UI (Settings tab).
 # Variables with the old PUS_ prefix are still understood.
 #
-# The docker socket is OPTIONAL: only the "update Portainer itself" feature
-# needs it (docker compose pull/up in Portainer's compose dir). Checks,
-# backups, pruning and stack redeploys all go through the Portainer API.
+# Auth: reachable beyond localhost means a token is required. Without
+# QK_AUTH_TOKEN, Quaykeeper generates one on first start and prints it in
+# the container log (docker logs quaykeeper).
+#
+# The docker socket is NOT mounted by default: only the optional "update
+# Portainer itself" feature needs it. Checks, backups, pruning and stack
+# redeploys all go through the Portainer API.
 
 services:
   quaykeeper:
@@ -25,7 +29,7 @@ services:
       # QK_PORTAINER_URL: "http://portainer:9000"
       # QK_PORTAINER_API_KEY: "ptr_xxxxxxxxxxxxxxxxxxxx"
       QK_UPDATE_INTERVAL_HOURS: "168"                 # weekly (interval mode)
-      # QK_AUTH_TOKEN: "change-me"                    # recommended!
+      # QK_AUTH_TOKEN: "choose-a-long-random-string" # else one is generated
       # QK_NOTIFY_WEBHOOK: "https://ntfy.sh/your-topic"
       TZ: "Europe/Berlin"
     volumes:
@@ -34,7 +38,10 @@ services:
       # backups and settings
       - update-service-data:/app/data                  # status/history/logs/backups
       - update-service-config:/app/config              # settings (survive redeploys)
-      - /var/run/docker.sock:/var/run/docker.sock      # optional: Portainer self-update
+      # only for 'update Portainer itself' (Settings), together with
+      # Portainer's compose dir mounted read-only (see docs/configuration.md):
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # - /path/to/portainer:/host-portainer:ro
     # Quaykeeper detects the stack that runs it and never redeploys itself
     # during an update run - use 'Update Quaykeeper' in Settings for that.
 

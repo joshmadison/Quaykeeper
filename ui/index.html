@@ -589,15 +589,30 @@ function toast(msg,cls='',sticky=false){
   if(token===toastToken)t.style.display='none';
  },sticky?12000:4000);
 }
-async function api(path,opts={}){
+/* one shared prompt for all requests that hit a 401 at the same time;
+   Cancel forgets the stored token and stops asking until the next action */
+let authAsk=null;
+function askToken(){
+ if(!authAsk)authAsk=new Promise(res=>setTimeout(()=>{
+  const tok=prompt('Quaykeeper needs its auth token.\n\nIt was printed in the container log on first start and is stored in config/config.yaml (or set via QK_AUTH_TOKEN).');
+  if(tok&&tok.trim()){AUTH_TOKEN=tok.trim();try{localStorage.setItem('qk_token',AUTH_TOKEN)}catch(_){}}
+  else{AUTH_TOKEN='';try{localStorage.removeItem('qk_token')}catch(_){}}
+  res(!!(tok&&tok.trim()));
+ },0)).finally(()=>setTimeout(()=>{authAsk=null},0));
+ return authAsk;
+}
+async function rawFetch(path,opts={},retry=true){
  opts.headers=authHeaders(opts.headers);
- if(opts.body&&!opts.headers['Content-Type'])opts.headers['Content-Type']='application/json';
  const r=await fetch(path,opts);
- if(r.status===401&&AUTH_ENABLED){
-  const tok=prompt('This instance requires an auth token.\n(Settings > auth_token in config.yaml):');
-  if(tok!==null){AUTH_TOKEN=tok.trim();localStorage.setItem('qk_token',AUTH_TOKEN);}
-  if(AUTH_TOKEN){opts.headers=authHeaders(opts.headers);return api(path,opts)}
+ if(r.status===401&&retry){
+  AUTH_ENABLED=true;
+  if(await askToken())return rawFetch(path,opts,false);
  }
+ return r;
+}
+async function api(path,opts={}){
+ if(opts.body&&!(opts.headers||{})['Content-Type'])opts.headers={...(opts.headers||{}),'Content-Type':'application/json'};
+ const r=await rawFetch(path,opts);
  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.statusText);return j}
 
 /* ---------------------------------------------------------------- tabs */
@@ -810,7 +825,7 @@ async function showRunLog(id,live=false){
  const p=$('runLog');p.style.display='block';p.textContent='loading…';
  p.scrollIntoView({behavior:REDUCED.matches?'auto':'smooth',block:'nearest'});
  stopLiveLog();
- try{p.textContent=await (await fetch('/api/runs/'+encodeURIComponent(id)+'/log')).text()}
+ try{p.textContent=await (await rawFetch('/api/runs/'+encodeURIComponent(id)+'/log')).text()}
  catch(e){p.textContent=e.message}
  if(live&&id){
   p._live=id;
@@ -819,7 +834,7 @@ async function showRunLog(id,live=false){
    if(!p._live||p._live!==id){clearInterval(liveLogTimer);liveLogTimer=null;return}
    try{
     const cur=await api('/api/runs/current');
-    const txt=await (await fetch('/api/runs/'+encodeURIComponent(id)+'/log')).text();
+    const txt=await (await rawFetch('/api/runs/'+encodeURIComponent(id)+'/log')).text();
     const atBottom=p.scrollHeight-p.scrollTop-p.clientHeight<40;
     p.textContent=txt;
     if(atBottom||live)p.scrollTop=p.scrollHeight;
@@ -1218,12 +1233,10 @@ $('btnScan').onclick=async()=>{
  const res=$('scanResult');
  res.style.display='block';res.textContent='scanning…';
  try{
-  const u=$('sUrl').value.trim();
-  let q='';
-  if(u||($('sKey').value.trim()&&$('sKey').value.trim()!=='***')){
-   q='?url='+encodeURIComponent(u)+'&key='+encodeURIComponent($('sKey').value.trim()==='***'?'':$('sKey').value.trim());
-  }
-  const r=await api('/api/endpoints'+q);
+  const body={portainer_url:$('sUrl').value.trim()};
+  const key=$('sKey').value.trim();
+  if(key&&key!=='***')body.portainer_api_key=key;
+  const r=await api('/api/endpoints',{method:'POST',body:JSON.stringify(body)});
   const box=document.createElement('div');box.className='tag-sel';
   r.endpoints.forEach(e=>{
    const b=document.createElement('button');

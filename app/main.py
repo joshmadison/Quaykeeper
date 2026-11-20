@@ -30,37 +30,51 @@ def _err(msg, code=400):
 MUTATING = {"POST", "PUT", "DELETE"}
 
 
+def _request_host() -> str:
+    h = request.host or ""
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else h
+    return h.split(":", 1)[0]
+
+
 @app.before_request
 def _auth_gate():
-    """Two protections for mutating requests:
+    """Who may call what.
 
-    1. Bearer auth when auth_token is set (constant-time compare).
-    2. CSRF guard when it is NOT set: a cross-site form POST from any
-       website the user visits would otherwise trigger /api/update,
-       /api/prune, /api/self_update (browsers cannot set custom headers
-       cross-origin without a preflight, and simple form posts skip
-       preflight). Requiring a same-origin Origin header (or its absence
-       for same-origin/CLI requests) closes that path without affecting
-       the UI, which always sends a custom Authorization header.
+    With auth_token set (always the case when listening beyond localhost -
+    main() generates one), EVERY /api/* route needs 'Authorization: Bearer
+    <token>', reads included: compose files, run logs and settings carry
+    secrets and map the whole infrastructure. Only /healthz and the static
+    UI files stay public.
+
+    Without a token Quaykeeper only listens on localhost. Two guards apply:
+    - Host must be a loopback name. A malicious page that rebinds its own
+      DNS name to 127.0.0.1 sends Host: evil.example and is refused.
+    - Mutating requests need a same-origin Origin header (or none, for CLI
+      tools) - CSRF protection against cross-site form posts.
     """
-    if request.method not in MUTATING:
+    path = request.path
+    if not path.startswith("/api/"):
         return None
     token = get("auth_token", "")
     if token:
-        supplied = request.headers.get("Authorization", "")
-        # constant-time compare to avoid timing leaks (plain == short-circuits)
         import hmac
-        ok = hmac.compare_digest(supplied, f"Bearer {token}")
+        supplied = request.headers.get("Authorization", "")
+        ok = hmac.compare_digest(supplied.encode("utf-8", "replace"),
+                                 f"Bearer {token}".encode("utf-8", "replace"))
         if not ok:
             return _err("unauthorized - set Authorization: Bearer <auth_token>", 401)
         return None
-    # no auth_token configured: enforce same-origin (CSRF protection).
-    origin = request.headers.get("Origin", "")
-    if origin:
-        base = request.host_url.rstrip("/")
-        if origin.rstrip("/") != base:
+    from .config import is_loopback
+    if not is_loopback(_request_host()):
+        return _err("this host name is not allowed - set auth_token to reach "
+                    "Quaykeeper under other names", 403)
+    if request.method in MUTATING:
+        origin = request.headers.get("Origin", "")
+        if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
             return _err("cross-site request rejected - enable auth_token to "
                         "call the API from other origins", 403)
+    return None
 
 
 def _client() -> Portainer:
@@ -142,20 +156,36 @@ def healthz():
     }), (200 if not stale else 503)
 
 
-@app.route("/api/test", methods=["GET", "POST"])
-def api_test():
-    """Settings 'Test connection' button: verify API + resolve endpoint.
-
-    Accepts optional body {"url": "...", "api_key": "..."} to test the
-    FIRST-RUN connection BEFORE saving anything to config.
-    """
+def _probe_client():
+    """Client for the Settings 'Test connection' / 'Scan' buttons, which may
+    run BEFORE anything is saved. The stored API key is only ever sent to
+    the stored URL: a request that names another URL must bring its own key
+    (otherwise any caller could make Quaykeeper send the admin key to a
+    server of their choice)."""
     body = request.get_json(silent=True) or {}
-    url = body.get("portainer_url") or get("portainer_url")
-    key = body.get("portainer_api_key") or get("portainer_api_key")
-    if not url or not key or key == "***":
-        return _err("not configured - Portainer URL and API key required", 400)
-    client = Portainer(url, key, tls_verify=bool(get("tls_verify", False)),
-                          tls_ca_file=(get("tls_ca_file", "") or None))
+    stored_url = (get("portainer_url") or "").rstrip("/")
+    url = (body.get("portainer_url") or "").strip().rstrip("/") or stored_url
+    key = (body.get("portainer_api_key") or "").strip()
+    if not key or key == "***":
+        if url != stored_url:
+            raise ValueError("enter the API key to test a different Portainer URL")
+        key = get("portainer_api_key") or ""
+    if not url or not key:
+        raise ValueError("not configured - Portainer URL and API key required")
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("Portainer URL must start with http:// or https://")
+    return Portainer(url, key, tls_verify=bool(get("tls_verify", False)),
+                     tls_ca_file=(get("tls_ca_file", "") or None))
+
+
+@app.route("/api/test", methods=["POST"])
+def api_test():
+    """Settings 'Test connection': verify API + resolve endpoint.
+    Body (optional): {"portainer_url", "portainer_api_key"}."""
+    try:
+        client = _probe_client()
+    except ValueError as e:
+        return _err(str(e), 400)
     try:
         st = client.status()
         endpoint_id = client.resolve_endpoint(socket.gethostname())
@@ -165,16 +195,13 @@ def api_test():
                     "endpoint_id": endpoint_id})
 
 
-@app.route("/api/endpoints")
+@app.route("/api/endpoints", methods=["POST"])
 def api_endpoints():
-    """Scan Portainer for available endpoints (Settings 'Scan' button).
-    Accepts ?url=&key= params to scan BEFORE saving credentials."""
-    url = request.args.get("url") or get("portainer_url")
-    key = request.args.get("key") or get("portainer_api_key")
-    if not url or not key or key == "***":
-        return _err("not configured - Portainer URL and API key required", 400)
-    client = Portainer(url, key, tls_verify=bool(get("tls_verify", False)),
-                          tls_ca_file=(get("tls_ca_file", "") or None))
+    """Settings 'Scan': list Portainer endpoints. Same body as /api/test."""
+    try:
+        client = _probe_client()
+    except ValueError as e:
+        return _err(str(e), 400)
     try:
         eps = client.endpoints()
     except PortainerError as e:
@@ -348,8 +375,9 @@ def api_stack_set_image(stack_id):
     """
     body = request.get_json(silent=True) or {}
     service, image = body.get("service"), (body.get("image") or "").strip()
-    if not service or not re.match(r"^[A-Za-z0-9_./:@-]+$", image):
-        return _err("service and valid image required")
+    if not isinstance(service, str) or not re.match(r"^[A-Za-z0-9_.-]{1,128}$", service) \
+            or not compose_mod.valid_image_ref(image):
+        return _err("service and a valid image reference required")
     if not gate.try_acquire("pin-version"):
         return _err("another job is running - see /api/runs/current", 409)
     try:
@@ -453,40 +481,48 @@ def _run_rollback_worker(runlog, stack_name, target_images):
 @app.route("/api/stacks/<int:stack_id>/rollback", methods=["POST"])
 def api_stack_rollback(stack_id):
     """'Restore last healthy': async rollback of ONE stack to its stored
-    pre-update image snapshot. Gate acquired first, RunLogger second."""
+    pre-update image snapshot.
+
+    The images always come from the server-side snapshot - never from the
+    request. A body {"images": {...}} may only narrow the restore to some
+    services and must name exactly the snapshot's images."""
     body = request.get_json(silent=True) or {}
-    target = body.get("images") or {}
-    if not isinstance(target, dict) or not target:
-        return _err("images map required (service -> image)")
-    for svc, img in target.items():
-        if not re.match(r"^[A-Za-z0-9_./:@-]+$", svc) or \
-                not re.match(r"^[A-Za-z0-9_./:@${}-]+$", str(img)):
-            return _err("invalid service/image entry")
+    wanted = body.get("images") or {}
+    if not isinstance(wanted, dict):
+        return _err("images must be a map service -> image")
     if not gate.try_acquire("rollback"):
         return _err("another job is running - see /api/runs/current", 409)
-    runlog = None
+    handed_off = False
     try:
         client, e = _client_or_error()
         if e:
-            gate.release()
             return e
-        stack = next((s for s in client.stacks() if s["Id"] == stack_id), None)
+        try:
+            stack = next((s for s in client.stacks() if s["Id"] == stack_id), None)
+        except PortainerError as ex:
+            return _err(str(ex), 502)
         if not stack:
-            gate.release()
             return _err("stack not found", 404)
+        from . import snapshots as snap_mod
+        snap = snap_mod.get_snapshot(stack.get("Name", "")) or {}
+        target = dict(snap.get("images") or {})
+        if not target:
+            return _err("no snapshot for this stack", 404)
+        if wanted:
+            if any(target.get(svc) != img for svc, img in wanted.items()):
+                return _err("requested images do not match the stored snapshot", 409)
+            target = {svc: target[svc] for svc in wanted}
         runlog = RunLogger("rollback", "manual")
         gate.set_runlog(runlog)
         runlog.step("rollback_started", True)
-        threading.Thread(
-            target=_run_rollback_worker,
-            args=(runlog, stack.get("Name", ""), dict(target)),
-            daemon=True).start()
+        threading.Thread(target=_run_rollback_worker,
+                         args=(runlog, stack.get("Name", ""), target),
+                         daemon=True).start()
+        handed_off = True  # the worker releases the gate
         return jsonify({"ok": True, "run_id": runlog.run_id})
-    except PortainerError as e:
-        if runlog:
-            runlog.finish(False)
+    finally:
+        if not handed_off:
             gate.release()
-        return _err(str(e), 502)
 
 
 @app.route("/api/versions")
@@ -717,6 +753,16 @@ def api_settings_post():
             validated[k] = validate(k, v)  # raises ConfigError on garbage
         except ConfigError as e:
             return _err(str(e))
+    from .config import is_loopback
+    new_url = validated.get("portainer_url")
+    if new_url is not None and new_url.rstrip("/") != (get("portainer_url") or "").rstrip("/") \
+            and get("portainer_api_key") and "portainer_api_key" not in validated:
+        # the stored admin key must never follow a URL change silently
+        return _err("enter the API key again when changing the Portainer URL")
+    if "auth_token" in validated and not validated["auth_token"] \
+            and not is_loopback(get("listen_host", "127.0.0.1")):
+        return _err("auth_token cannot be empty while Quaykeeper listens beyond "
+                    "localhost")
     for k, v in validated.items():
         cfg_set(k, v)
     cfg_save()
@@ -724,13 +770,32 @@ def api_settings_post():
 
 
 # ----------------------------------------------------------------------- main
+def _ensure_auth_token(host) -> None:
+    """Listening beyond localhost without a token would hand the admin
+    Portainer key's power to everyone on the network. Generate one on first
+    start, store it in config.yaml and print it once."""
+    from .config import is_loopback
+    if get("auth_token", "") or is_loopback(host):
+        return
+    import secrets
+    token = secrets.token_urlsafe(24)
+    cfg_set("auth_token", token)
+    cfg_save()
+    line = "=" * 64
+    print(f"{line}\n[quaykeeper] No auth_token was set, so one was generated:\n\n"
+          f"    {token}\n\nEnter it in the browser when asked. It is stored in "
+          f"config/config.yaml\n(set QK_AUTH_TOKEN to choose your own).\n{line}",
+          flush=True)
+
+
 def main():
     load()
     from .history import mark_interrupted
     mark_interrupted()  # convert stale 'running' markers from a crash
-    scheduler.start()
     host = get("listen_host", "127.0.0.1")
     port = int(get("listen_port", 8090))
+    _ensure_auth_token(host)
+    scheduler.start()
     # production WSGI server (waitress): graceful threads, no dev-server warning.
     # ARCHITECTURAL INVARIANT: this app MUST run as a single process with N
     # threads. The JobGate (app/jobs.py), checker caches and the state files

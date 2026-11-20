@@ -134,9 +134,12 @@ class TestApiSmoke:
         # correct token -> past auth (409 busy or success)
         r = client.post("/api/update", headers={"Authorization": "Bearer secret123"})
         assert r.status_code != 401
-        # reads are never gated
-        r = client.get("/api/status")
+        # reads are gated too: compose files and logs carry secrets
+        assert client.get("/api/status").status_code == 401
+        r = client.get("/api/status", headers={"Authorization": "Bearer secret123"})
         assert r.status_code == 200
+        # liveness and the UI shell stay public
+        assert client.get("/healthz").status_code in (200, 503)
 
     def test_run_log_path_traversal_blocked(self, client):
         r = client.get("/api/runs/..%2f..%2fetc%2fpasswd/log")

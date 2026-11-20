@@ -140,16 +140,28 @@ def validate(key: str, value):
 
 _lock = threading.Lock()
 _cfg = None
+# raw config.yaml content plus changes made through set(): the ONLY thing
+# save() writes. _cfg also holds defaults and QK_* env overrides, which must
+# never end up in the file (secrets in plaintext, stale values after an env
+# var is rotated or removed).
+_file = None
+
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def is_loopback(host) -> bool:
+    return str(host or "").strip().strip("[]").lower() in LOOPBACK_HOSTS
 
 
 def load(force: bool = False) -> dict:
-    global _cfg
+    global _cfg, _file
     with _lock:
         if _cfg is not None and not force:
             return _cfg
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
         cfg = dict(DEFAULTS)
+        user = {}
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 user = yaml.safe_load(f) or {}
@@ -188,6 +200,7 @@ def load(force: bool = False) -> dict:
         # expose the flat alias so /api/settings GET + UI checkbox stay in sync
         cfg["repairs_enabled"] = bool(cfg["repairs"].get("enabled", True))
         _cfg = cfg
+        _file = dict(user) if isinstance(user, dict) else {}
         return cfg
 
 
@@ -208,7 +221,7 @@ def save() -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         tmp = CONFIG_FILE.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
-            yaml.safe_dump(_cfg, f, sort_keys=False, allow_unicode=True)
+            yaml.safe_dump(_file or {}, f, sort_keys=False, allow_unicode=True)
         tmp.replace(CONFIG_FILE)
 
 
@@ -225,7 +238,9 @@ def set(key: str, value) -> None:
         with _lock:
             _cfg["repairs_enabled"] = value
             _cfg["repairs"] = {**_cfg.get("repairs", {}), "enabled": value}
+            _file["repairs_enabled"] = value
         return
     validated = validate(key, value)
     with _lock:
         _cfg[key] = validated
+        _file[key] = validated

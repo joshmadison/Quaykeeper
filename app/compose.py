@@ -74,3 +74,17 @@ def set_image(compose_text: str, service: str, new_image: str) -> str:
         raise ValueError(f"Service '{service}' or its image line not found in compose file")
     trailing = "\n" if compose_text.endswith("\n") else ""
     return "\n".join(out) + trailing
+
+# Docker image reference: [registry[:port]/]path[:tag][@sha256:digest]
+_IMAGE_REF = re.compile(
+    r"^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?/)?"
+    r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+    r"(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*"
+    r"(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?"
+    r"(?:@sha256:[a-f0-9]{64})?$")
+
+
+def valid_image_ref(ref) -> bool:
+    """Strict reference grammar: no whitespace, no YAML/compose
+    interpolation (${...}), no leading '@' or ':' that breaks the file."""
+    return isinstance(ref, str) and len(ref) <= 512 and bool(_IMAGE_REF.match(ref))
