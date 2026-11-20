@@ -13,7 +13,7 @@
 :root{
   /* Quaykeeper "Nightshift": near-black, one phosphor accent, lots of mono */
   --bg:#0a0b0a;--panel:#121411;--panel2:#181b16;--line:#262a22;--line-strong:#363c30;
-  --txt:#e9ede4;--mut:#8e9688;--acc:#b8f35a;--acc-btn:#b8f35a;--acc-hover:#cbff7a;--acc-ink:#0a0b0a;
+  --txt:#e9ede4;--mut:#8e9688;--field-line:#5c6553;--acc:#b8f35a;--acc-btn:#b8f35a;--acc-hover:#cbff7a;--acc-ink:#0a0b0a;
   --ok:#4fd18b;--warn:#f2c14e;--err:#ff6a55;--err-btn:#ff6a55;--err-hover:#ff8572;
   --ok-bg:rgba(79,209,139,.13);--warn-bg:rgba(242,193,78,.13);
   --err-bg:rgba(255,106,85,.13);--mut-bg:rgba(142,150,136,.14);--acc-bg:rgba(184,243,90,.12);
@@ -153,10 +153,10 @@ pre.log{background:#070807;border:1px solid var(--line);border-radius:var(--radi
 .modal h3{font:600 1rem/1.3 var(--mono);letter-spacing:-.03em;margin-bottom:.75rem}
 .modal:focus{outline:none}
 select,input[type=text],input[type=password],input[type=number],input[type=url],input[type=time]{
-  background:var(--panel2);border:1px solid var(--line);color:var(--txt);padding:.4375rem .625rem;border-radius:.4375rem;
+  background:var(--panel2);border:1px solid var(--field-line);color:var(--txt);padding:.4375rem .625rem;border-radius:.4375rem;
   font:inherit;font-size:.84375rem;
   transition:border-color .16s var(--ease-out),box-shadow .16s var(--ease-out)}
-select:hover,input[type=text]:hover,input[type=password]:hover,input[type=number]:hover,input[type=url]:hover,input[type=time]:hover{border-color:var(--line-strong)}
+select:hover,input[type=text]:hover,input[type=password]:hover,input[type=number]:hover,input[type=url]:hover,input[type=time]:hover{border-color:#7a846f}
 select:focus,input[type=text]:focus,input[type=password]:focus,input[type=number]:focus,input[type=url]:focus,input[type=time]:focus{
   border-color:var(--acc);outline:none;box-shadow:0 0 0 3px rgba(184,243,90,.16)}
 input[type=checkbox]{accent-color:var(--acc);width:1rem;height:1rem;vertical-align:-.125rem}
@@ -169,6 +169,9 @@ input[type=text],input[type=password],input[type=number],input[type=url],input[t
   -webkit-backdrop-filter:blur(1rem) saturate(180%);backdrop-filter:blur(1rem) saturate(180%);
   opacity:var(--toast-op,0);transform:translate3d(0,var(--toast-ty,14px),0);will-change:transform,opacity}
 .toast.ok{border-left-color:var(--ok)}.toast.err{border-left-color:var(--err)}
+.toast{align-items:flex-start;gap:.75rem}
+.toast-x{flex:none;background:none;border:0;color:var(--mut);font:600 1.125rem/1 var(--font);cursor:pointer;padding:0 .125rem;margin:-.125rem -.25rem 0 0}
+.toast-x:hover{color:var(--txt)}
 .kv{display:grid;grid-template-columns:9.375rem 1fr;gap:.375rem;font-size:.84375rem}
 .kv .k{color:var(--mut)}
 .empty{color:var(--mut);text-align:center;padding:1.625rem}
@@ -217,7 +220,11 @@ tr.unsafe td:not(.chk){color:var(--mut)}
 }
 @media(max-width:640px){
   main{padding:.875rem}
-  header{padding:.625rem .875rem}
+  /* phones: header scrolls away, nav is one swipeable row */
+  header{padding:.625rem .875rem;position:static}
+  nav{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;max-width:100%}
+  nav::-webkit-scrollbar{display:none}
+  .cl-actions{position:static;box-shadow:none}
   header h1{font-size:1rem}
   nav{margin-left:0}
   .modal-bg{padding:.75rem}
@@ -369,13 +376,13 @@ tr.unsafe td:not(.chk){color:var(--mut)}
   <div class="panel" style="max-width:640px;margin:0 auto">
 
     <h2>Connection</h2>
-    <label class="f">Portainer URL</label><input type="url" id="sUrl" placeholder="https://portainer:9443">
-    <label class="f">API key</label><input type="password" id="sKey" placeholder="ptr_... (leave *** to keep)">
+    <label class="f" for="sUrl">Portainer URL</label><input type="url" id="sUrl" placeholder="https://portainer:9443">
+    <label class="f" for="sKey">API key</label><input type="password" id="sKey" placeholder="ptr_... (leave *** to keep)">
     <div class="row" style="margin-top:8px">
       <button class="btn sec sm" id="btnTest">Test connection</button>
       <span class="mono" id="testResult"></span>
     </div>
-    <label class="f">Portainer endpoint</label>
+    <label class="f" for="sEid">Portainer endpoint</label>
     <div class="row">
       <input type="number" id="sEid" placeholder="auto / endpoint id" style="flex:1;min-width:130px">
       <button class="btn sec sm" id="btnScan">Scan</button>
@@ -386,22 +393,22 @@ tr.unsafe td:not(.chk){color:var(--mut)}
 
     <div class="divider"></div>
     <h2>Schedule</h2>
-    <label class="f">Schedule mode</label>
+    <label class="f" for="sMode">Schedule mode</label>
     <select id="sMode" style="width:100%">
       <option value="interval">Interval (every N hours)</option>
       <option value="daily">Daily at time</option>
       <option value="weekly">Weekly at time</option>
     </select>
     <div id="modeInterval">
-      <label class="f">Update interval (hours) - checks + full updates</label>
+      <label class="f" for="sInt">Update interval (hours) - checks + full updates</label>
       <input type="number" id="sInt" min="1" max="8760">
     </div>
     <div id="modeTime" style="display:none">
-      <label class="f">Run time (server time)</label>
+      <label class="f" for="sTime">Run time (server time)</label>
       <input type="time" id="sTime">
     </div>
     <div id="modeWeekly" style="display:none">
-      <label class="f">Weekday</label>
+      <label class="f" for="sDay">Weekday</label>
       <select id="sDay" style="width:100%">
         <option value="0">Monday</option><option value="1">Tuesday</option>
         <option value="2">Wednesday</option><option value="3">Thursday</option>
@@ -412,13 +419,13 @@ tr.unsafe td:not(.chk){color:var(--mut)}
     <div class="b-sub" style="color:var(--mut);font-size:12px;margin-top:8px">
       Server time: <span id="sServerTime">–</span> (<span id="sServerTz">–</span>) — the schedule refers to this clock.
     </div>
-    <label class="f">Check cache (minutes)</label><input type="number" id="sCache" min="5" max="720">
+    <label class="f" for="sCache">Check cache (minutes)</label><input type="number" id="sCache" min="5" max="720">
 
     <div class="divider"></div>
     <h2>Deployment</h2>
-    <label class="f">Max parallel deploys</label><input type="number" id="sPar" min="1" max="10">
-    <label class="f">Deploy wait time (seconds)</label><input type="number" id="sWait" min="30" max="3600">
-    <label class="f">Backups to keep</label><input type="number" id="sKeep" min="1" max="100">
+    <label class="f" for="sPar">Max parallel deploys</label><input type="number" id="sPar" min="1" max="10">
+    <label class="f" for="sWait">Deploy wait time (seconds)</label><input type="number" id="sWait" min="30" max="3600">
+    <label class="f" for="sKeep">Backups to keep</label><input type="number" id="sKeep" min="1" max="100">
     <label class="f" style="margin-top:14px"><input type="checkbox" id="sIncludePortainer"> <b>Include Portainer updates</b></label>
     <div class="row" style="margin-top:8px">
       <button class="btn sec sm" id="btnMountCheck">Check compose mount</button>
@@ -435,7 +442,7 @@ tr.unsafe td:not(.chk){color:var(--mut)}
 
     <div class="divider"></div>
     <h2>Notification</h2>
-    <label class="f">Failure notification webhook (optional, e.g. ntfy)</label><input type="url" id="sHook" placeholder="https://ntfy.example/your-topic">
+    <label class="f" for="sHook">Failure notification webhook (optional, e.g. ntfy)</label><input type="url" id="sHook" placeholder="https://ntfy.example/your-topic">
 
     <div class="divider"></div>
     <h2>Network integrity repairs</h2>
@@ -472,7 +479,7 @@ tr.unsafe td:not(.chk){color:var(--mut)}
   </div>
 </div>
 
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span><button type="button" class="toast-x" id="toastX" aria-label="Dismiss">×</button></div>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -578,17 +585,24 @@ function authHeaders(extra){
 let toastTimer=null,toastToken=0;
 function toast(msg,cls='',sticky=false){
  const t=$('toast');
- t.textContent=msg;t.className='toast '+cls;t.style.display='block';
+ $('toastMsg').textContent=msg;t.className='toast '+cls;t.style.display='flex';
+ /* errors are announced assertively and stay until dismissed */
+ t.setAttribute('role',cls==='err'?'alert':'status');
+ t.setAttribute('aria-live',cls==='err'?'assertive':'polite');
  springTo(t,{'--toast-op':1,'--toast-ty':0},{damping:.9,response:.32,velocity:{'--toast-ty':-220}});
  clearTimeout(toastTimer);
  const token=++toastToken;
- toastTimer=setTimeout(async()=>{
-  if(token!==toastToken)return;
-  springTo(t,{'--toast-op':0,'--toast-ty':12},{damping:1,response:.24});
-  await sleep(REDUCED.matches?200:260);
-  if(token===toastToken)t.style.display='none';
- },sticky?12000:4000);
+ if(cls==='err')return;
+ toastTimer=setTimeout(()=>hideToast(token),sticky?12000:6000);
 }
+async function hideToast(token=toastToken){
+ const t=$('toast');
+ if(token!==toastToken)return;
+ springTo(t,{'--toast-op':0,'--toast-ty':12},{damping:1,response:.24});
+ await sleep(REDUCED.matches?200:260);
+ if(token===toastToken)t.style.display='none';
+}
+$('toastX').onclick=()=>{clearTimeout(toastTimer);hideToast()};
 /* one shared prompt for all requests that hit a 401 at the same time;
    Cancel forgets the stored token and stops asking until the next action */
 let authAsk=null;
@@ -619,6 +633,7 @@ async function api(path,opts={}){
 let currentTabName='dash';
 function showTab(name){
  const changed=currentTabName!==name;
+ if(changed&&currentTabName==='history'&&typeof stopLiveLog==='function')stopLiveLog();
  currentTabName=name;
  document.querySelectorAll('nav button').forEach(b=>{
   const on=b.dataset.tab===name;
@@ -837,7 +852,7 @@ async function showRunLog(id,live=false){
     const txt=await (await rawFetch('/api/runs/'+encodeURIComponent(id)+'/log')).text();
     const atBottom=p.scrollHeight-p.scrollTop-p.clientHeight<40;
     p.textContent=txt;
-    if(atBottom||live)p.scrollTop=p.scrollHeight;
+    if(atBottom)p.scrollTop=p.scrollHeight;
     if(!cur.active||cur.run_id!==id){stopLiveLog()}
    }catch(e){}
   },3000);
@@ -912,7 +927,7 @@ document.addEventListener('click',e=>{
  e.preventDefault();
  const act=el.dataset.act;
  if(act==='open')openStack(el.dataset.nm);
- if(act==='pin')openStack(null,+el.dataset.id,null,el.dataset.svc);
+ if(act==='pin')openStack(null,+el.dataset.id,el.dataset.svc);
  if(act==='redeploy')redeployStack(+el.dataset.st,el.dataset.nm);
 });
 
@@ -926,23 +941,29 @@ async function redeployStack(id,name){
 }
 
 /* ------------------------------------------------------------ stack modal */
-let modalStackId=null;
+let modalStackId=null,stackLoadSeq=0;
 async function openStack(name,focusSvc,focusSvcName){
+ /* every open gets a sequence number: a slow answer for a stack opened
+    earlier must never fill (or arm the buttons of) the sheet of another */
+ const seq=++stackLoadSeq;
  openModal();$('mTitle').textContent=name||'Stack';
  $('mBody').innerHTML='<div class="empty">loading…</div>';$('mCompose').textContent='';
+ $('mRollback').innerHTML='';$('mRedeploy').onclick=null;$('mRedeploy').disabled=true;
  try{
   let id;
-  if(name){const st=await api('/api/stacks');const meta=st.stacks.find(x=>x.name===name);
+  if(name){const st=await api('/api/stacks');if(seq!==stackLoadSeq)return;
+   const meta=st.stacks.find(x=>x.name===name);
    if(!meta)throw new Error('stack not found');id=meta.id}
   else id=focusSvc;
   const d=await api('/api/stacks/'+id);
+  if(seq!==stackLoadSeq)return;
   modalStackId=id;
   $('mTitle').textContent=d.name;
-  $('mRedeploy').onclick=()=>redeployStack(id,d.name);
+  $('mRedeploy').onclick=()=>redeployStack(id,d.name);$('mRedeploy').disabled=false;
   $('mCompose').textContent=d.compose;
   $('mBody').innerHTML='';
   // rollback strip (before the service table): restore the pre-update snapshot
-  loadRollbackStrip(id,d.name);
+  loadRollbackStrip(id,d.name,seq);
   const entries=Object.entries(d.images||{});
   if(!entries.length){$('mBody').innerHTML='<div class="empty">No explicit images in compose file.</div>';return}
   const tbl=document.createElement('table');
@@ -964,7 +985,7 @@ async function openStack(name,focusSvc,focusSvcName){
    const info=document.createElement('div');info.className='tag-sel';
    btn.onclick=async()=>{
     const val=sel.value.trim();
-    if(!/^[A-Za-z0-9_./:@-]+$/.test(val)){toast('Invalid image reference','err');return}
+    if(!/^[A-Za-z0-9][A-Za-z0-9_./:@-]*$/.test(val)||/\s/.test(val)){toast('Invalid image reference','err');return}
     // warn if tag not in known registry tags
     try{
      const v=await api('/api/versions?image='+encodeURIComponent(img));
@@ -974,6 +995,7 @@ async function openStack(name,focusSvc,focusSvcName){
       if(!confirm(`Tag "${typed}" not found in registry tag list. Deploy anyway?`))return;
      }
     }catch(_){}
+    if(!confirm(`Change ${svc} in "${d.name}"\n\n  ${img}\n→ ${val}\n\nThe compose file is edited permanently and the stack is redeployed.`))return;
     btn.disabled=true;btn.textContent='Deploying…';
     try{await api(`/api/stacks/${id}/image`,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({service:svc,image:val})});
@@ -1007,12 +1029,13 @@ async function openStack(name,focusSvc,focusSvcName){
  }catch(e){$('mBody').innerHTML=`<div class="empty">${esc(e.message)}</div>`}
 }
 /* ----------------------------------------------------- rollback (restore last healthy) */
-async function loadRollbackStrip(stackId, stackName){
+async function loadRollbackStrip(stackId, stackName, seq){
  const box=$('mRollback');
  box.innerHTML='';
  let r;
  try{r=await api(`/api/stacks/${stackId}/rollback_info`)}
  catch(e){return}  // endpoint unavailable - ignore
+ if(seq!==stackLoadSeq)return;  // the sheet shows another stack by now
  if(!r.has_snapshot){return}
  const when=r.snapshot_ts?new Date(r.snapshot_ts*1000).toLocaleString():'?';
  if(!r.changes.length){
@@ -1036,6 +1059,8 @@ async function loadRollbackStrip(stackId, stackName){
  btn.className='btn sm';btn.style.marginTop='8px';btn.textContent='Restore these versions';
  btn.onclick=async()=>{
   if(!btn.disabled){
+   const list=r.changes.map(c=>`  ${c.service}: ${c.current} → ${c.restore}`).join('\n');
+   if(!confirm(`Restore ${r.changes.length} service(s) of "${stackName}"?\n\n${list}\n\nThe stack is redeployed with these images.`))return;
    btn.disabled=true;btn.textContent='Restoring…';
    const images={};
    r.changes.forEach(c=>images[c.service]=c.restore);
@@ -1289,12 +1314,12 @@ $('btnMountCheck').onclick=async()=>{
 };
 $('btnSelfUpdate').onclick=async()=>{
  if(!confirm('Update Quaykeeper itself now?\n\nRedeploys its own stack - the container will restart and the UI reconnects in a few seconds.'))return;
- const b=$('btnSelfUpdate');b.dataset.busy='1';
+ const b=$('btnSelfUpdate');b.dataset.busy='1';b.disabled=true;
  try{const r=await api('/api/self_update',{method:'POST'});
   toast('Quaykeeper self-update started - run '+r.run_id,'ok',true);
   gateBusyFlag=true;setBusyUI(true);ensureBannerTimer();await refreshRunBanner()}
  catch(e){toast(e.message,'err')}
- finally{delete b.dataset.busy}
+ finally{delete b.dataset.busy;b.disabled=false;if(gateBusyFlag)setBusyUI(true)}
 };
 $('btnTest').onclick=async()=>{
  $('testResult').textContent='testing…';
@@ -1309,12 +1334,12 @@ $('btnTest').onclick=async()=>{
 };
 $('btnPrune').onclick=async()=>{
  if(!confirm('Docker prune deletes ALL unused images and build cache.\n\nRollback to previous image versions becomes impossible and re-pulling will take time.\n\nContinue?'))return;
- const b=$('btnPrune');b.dataset.busy='1';
+ const b=$('btnPrune');b.dataset.busy='1';b.disabled=true;
  try{const r=await api('/api/prune',{method:'POST'});
   toast('Prune started - run '+r.run_id,'ok');gateBusyFlag=true;
   setBusyUI(true);ensureBannerTimer();await refreshRunBanner()}
  catch(e){toast(e.message,'err')}
- finally{delete b.dataset.busy}
+ finally{delete b.dataset.busy;b.disabled=false;if(gateBusyFlag)setBusyUI(true)}
 };
 
 
@@ -1340,17 +1365,25 @@ function clUpdate(){
  $('clImgAll').checked=CL.images.some(i=>i.safe)&&CL.images.filter(i=>i.safe).every(i=>clSelImg.has(i.id));
  $('clNetAll').checked=CL.networks.some(n=>n.safe)&&CL.networks.filter(n=>n.safe).every(n=>clSelNet.has(n.id));
 }
-function clRow(set,item,cells){
+function clRow(set,item,cells,label){
  const tr=document.createElement('tr');if(!item.safe)tr.className='unsafe';
- tr.innerHTML=`<td class="chk"><input type="checkbox" aria-label="select"></td>${cells}`;
+ tr.innerHTML=`<td class="chk"><input type="checkbox"></td>${cells}`;
  const cb=tr.querySelector('input');cb.checked=set.has(item.id);
+ cb.setAttribute('aria-label',`Select ${label}`+(item.safe?'':` (not safe: ${item.note})`));
  cb.onchange=()=>{cb.checked?set.add(item.id):set.delete(item.id);clUpdate()};
  return tr;
 }
 async function loadCleanup(){
  $('clInfo').textContent='scanning…';
  try{CL=await api('/api/cleanup')}
- catch(e){$('clInfo').textContent='';['clImgRows','clNetRows'].forEach(id=>$(id).innerHTML=`<tr><td colspan=5 class="empty">${esc(e.message)}</td></tr>`);return}
+ catch(e){
+  /* a failed scan must not leave the previous selection armed */
+  CL=null;clSelImg.clear();clSelNet.clear();$('clCacheSel').checked=false;
+  $('clInfo').textContent='scan failed';
+  ['clImgN','clNetN','clCache','clKeepN'].forEach(id=>$(id).textContent='–');
+  ['clImgRows','clNetRows'].forEach(id=>$(id).innerHTML=`<tr><td colspan=5 class="empty">${esc(e.message)}</td></tr>`);
+  ['clStopRows','clVolRows'].forEach(id=>$(id).innerHTML=`<tr><td colspan=3 class="empty">${esc(e.message)}</td></tr>`);
+  clUpdate();return}
  $('clInfo').textContent='scanned '+new Date(CL.analyzed_at*1000).toLocaleTimeString();
  const ids=new Set(CL.images.map(i=>i.id)),nids=new Set(CL.networks.map(n=>n.id));
  [...clSelImg].forEach(i=>ids.has(i)||clSelImg.delete(i));[...clSelNet].forEach(i=>nids.has(i)||clSelNet.delete(i));
@@ -1363,14 +1396,16 @@ async function loadCleanup(){
  const it=$('clImgRows');it.innerHTML='';
  if(!CL.images.length)it.innerHTML='<tr><td colspan=5 class="empty">No unused images.</td></tr>';
  CL.images.forEach(i=>it.appendChild(clRow(clSelImg,i,
-  `<td class="mono" title="${esc(i.id)}">${esc(i.tags[0]||'<untagged> '+i.id.slice(7,19))}${i.tags.length>1?' <span class="badge b-mut">+'+(i.tags.length-1)+'</span>':''}</td>
+  `<td class="mono" title="${esc(i.id)}">${i.safe?'':'<span class="badge b-warn">rollback</span> '}${esc(i.tags[0]||'<untagged> '+i.id.slice(7,19))}${i.tags.length>1?' <span class="badge b-mut">+'+(i.tags.length-1)+'</span>':''}</td>
    <td class="num">${fmtMB(i.size_mb)}</td><td class="num">${ageOf(i.created)}</td>
-   <td>${i.safe?(i.dangling?'<span class="badge b-mut">dangling</span>':''):'<span class="badge b-warn">rollback</span> <span class="cl-note">'+esc(i.note)+'</span>'}</td>`)));
+   <td>${i.safe?(i.dangling?'<span class="badge b-mut">dangling</span>':''):'<span class="cl-note">'+esc(i.note)+'</span>'}</td>`,
+  i.tags[0]||'untagged image')));
  const nt=$('clNetRows');nt.innerHTML='';
  if(!CL.networks.length)nt.innerHTML='<tr><td colspan=5 class="empty">No unused networks.</td></tr>';
  CL.networks.forEach(n=>nt.appendChild(clRow(clSelNet,n,
-  `<td class="mono">${esc(n.name)}</td><td>${esc(n.driver||'–')}</td><td>${esc(n.project||'–')}</td>
-   <td>${n.safe?'<span class="cl-note">'+esc(n.note)+'</span>':'<span class="badge b-info">protected</span> <span class="cl-note">'+esc(n.note)+'</span>'}</td>`)));
+  `<td class="mono">${n.safe?'':'<span class="badge b-info">protected</span> '}${esc(n.name)}</td><td>${esc(n.driver||'–')}</td><td>${esc(n.project||'–')}</td>
+   <td><span class="cl-note">${esc(n.note)}</span></td>`,
+  'network '+n.name)));
  const st=$('clStopRows');
  st.innerHTML=CL.stopped_containers.length?CL.stopped_containers.map(c=>`<tr><td class="mono">${esc(c.name)}</td><td>${esc(c.project||'–')}</td><td class="cl-note">${esc(c.status||c.state||'')}</td></tr>`).join(''):'<tr><td colspan=3 class="empty">No stopped containers.</td></tr>';
  const vt=$('clVolRows');
@@ -1395,7 +1430,7 @@ $('clRun').onclick=async()=>{
  const imgs=CL.images.filter(i=>clSelImg.has(i.id)),nets=CL.networks.filter(n=>clSelNet.has(n.id));
  const risky=imgs.filter(i=>!i.safe).length+nets.filter(n=>!n.safe).length;
  if(!confirm(`Remove ${$('clSum').textContent}?`+(risky?`\n\n${risky} selected item(s) are not marked safe (rollback image / network of an existing stack).`:'')))return;
- const b=$('clRun');b.dataset.busy='1';
+ const b=$('clRun');b.dataset.busy='1';b.disabled=true;
  try{
   const r=await api('/api/cleanup',{method:'POST',body:JSON.stringify({images:imgs.map(i=>i.id),networks:nets.map(n=>n.id),build_cache:$('clCacheSel').checked})});
   toast(r.ok?'Cleanup done - logged in History':'Cleanup finished with warnings - see History',r.ok?'ok':'err');
@@ -1412,23 +1447,25 @@ function setBusyUI(busy){
  if(busy)$('clRun').disabled=true;else clUpdate();
 }
 $('btnCheck').onclick=async()=>{
- const b=$('btnCheck');b.dataset.busy='1';
+ const b=$('btnCheck');b.dataset.busy='1';b.disabled=true;
  try{await api('/api/check',{method:'POST',body:JSON.stringify({force:true})});
   toast('Update check started','ok');ensureBannerTimer();setBusyUI(true);
   gateBusyFlag=true;await refreshRunBanner()}
  catch(e){toast(e.message,'err')}
- finally{delete b.dataset.busy}
+ finally{delete b.dataset.busy;b.disabled=false;if(gateBusyFlag)setBusyUI(true)}
 };
 $('btnRecheck').onclick=()=>$('btnCheck').onclick();
 $('btnUpdate').onclick=async()=>{
- if(!confirm('Run full update now?\n\n- backs up Portainer data\n- prunes unused images + build cache\n- redeploys ALL stacks (waits for each to become healthy)\n- updates Portainer itself\n\nThis takes several minutes (deploys run up to '+($('sWait')?.value||300)+'s per stack, max '+($('sPar')?.value||3)+' parallel).'))return;
- const b=$('btnUpdate');b.dataset.busy='1';
+ let cfg={};try{cfg=await api('/api/settings')}catch(_){}
+ const wait=cfg.deploy_wait_time||300,par=cfg.max_parallel_deploys||3;
+ if(!confirm('Run full update now?\n\n- backs up Portainer data\n- prunes unused images + build cache (rollback images are kept)\n- redeploys ALL stacks (waits for each to become healthy)'+(cfg.include_portainer?'\n- updates Portainer itself':'')+'\n\nThis takes several minutes (up to '+wait+'s per stack, '+par+' in parallel).'))return;
+ const b=$('btnUpdate');b.dataset.busy='1';b.disabled=true;
  try{const r=await api('/api/update',{method:'POST'});
   toast('Full update started - run '+r.run_id,'ok',true);
   gateBusyFlag=true;setBusyUI(true);ensureBannerTimer();await refreshRunBanner();
   showTab('dash')}
  catch(e){toast(e.message,'err')}
- finally{delete b.dataset.busy}
+ finally{delete b.dataset.busy;b.disabled=false;if(gateBusyFlag)setBusyUI(true)}
 };
 
 /* keyboard parity for the clickable summary cards */
@@ -1437,7 +1474,8 @@ function cardKey(el,fn){
 }
 
 /* ------------------------------------------------------------------- boot */
-refresh();setInterval(refresh,15000);
+refresh();setInterval(()=>{if(!document.hidden)refresh()},15000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 movePill(false);onScroll();
 
 </script>
