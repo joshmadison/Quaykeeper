@@ -183,6 +183,7 @@ input[type=text],input[type=password],input[type=number],input[type=url],input[t
 .tag-sel button:active{transform:scale(.96)}
 .tag-sel button.cur{border-color:var(--acc);color:var(--acc);background:var(--acc-bg);font-weight:600}
 .divider{border-top:1px solid var(--line);margin:1.25rem 0}
+.pager{display:flex;align-items:center;justify-content:center;gap:.875rem;margin-top:.75rem}
 /* cleanup tab: one number, one button, details on demand */
 .cl-note{color:var(--mut);font-size:.8125rem;line-height:1.5}
 .cl-hero{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:1.5rem;padding:1.375rem 1.5rem}
@@ -336,6 +337,11 @@ input[type=text],input[type=password],input[type=number],input[type=url],input[t
     <h2>Run log</h2>
     <div class="panel"><table><thead><tr><th>Run</th><th>Kind</th><th>Trigger</th><th>When</th><th class="num">Duration</th><th>Result</th><th></th></tr></thead>
     <tbody id="histRows"><tr><td colspan=7 class="empty">Loading…</td></tr></tbody></table></div>
+    <nav class="pager" id="histPager" aria-label="Run log pages" style="display:none">
+      <button class="btn sec sm" id="histPrev" aria-label="Newer runs">← Newer</button>
+      <span class="mono" id="histPage" aria-live="polite"></span>
+      <button class="btn sec sm" id="histNext" aria-label="Older runs">Older →</button>
+    </nav>
     <pre class="log" id="runLog" style="display:none"></pre>
   </section>
 </div>
@@ -1214,10 +1220,22 @@ async function loadHistory(){
   const durs=full.map(r=>r.duration_s).filter(x=>x!=null);
   const avg=durs.length?Math.round(durs.reduce((a,b)=>a+b,0)/durs.length):null;
   $('hDur').textContent=avg!=null?(avg>=60?Math.floor(avg/60)+'m '+avg%60+'s':avg+'s'):'–';
-  if(!h.length){tb.innerHTML='<tr><td colspan=7 class="empty">No runs yet.</td></tr>'}
-  else{
-   tb.innerHTML='';
-   [...h].reverse().forEach(r=>{
+  HIST=[...h].reverse();
+  renderHistPage();
+ }catch(e){tb.innerHTML=`<tr><td colspan=7 class="empty">${esc(e.message)}</td></tr>`;$('histPager').style.display='none'}
+}
+/* run log: 10 runs per page, newest first; the page survives refreshes */
+const HIST_PER_PAGE=10;let HIST=[],histPage=0;
+function renderHistPage(){
+ const tb=$('histRows');
+ const pages=Math.max(1,Math.ceil(HIST.length/HIST_PER_PAGE));
+ histPage=Math.min(Math.max(histPage,0),pages-1);
+ $('histPager').style.display=pages>1?'':'none';
+ $('histPage').textContent=`Page ${histPage+1} of ${pages}`;
+ $('histPrev').disabled=histPage===0;$('histNext').disabled=histPage>=pages-1;
+ if(!HIST.length){tb.innerHTML='<tr><td colspan=7 class="empty">No runs yet.</td></tr>';return}
+ tb.innerHTML='';
+ HIST.slice(histPage*HIST_PER_PAGE,(histPage+1)*HIST_PER_PAGE).forEach(r=>{
     const d=r.duration_s;
     const dur=d==null?'?':(d>=60?Math.floor(d/60)+'m '+Math.round(d%60)+'s':Math.round(d)+'s');
     const tr=document.createElement('tr');
@@ -1227,10 +1245,10 @@ async function loadHistory(){
      <td><button class="btn sm sec" data-run="${esc(r.run_id)}">Log</button></td>`;
     tr.querySelector('[data-run]').onclick=()=>showRunLog(r.run_id);
     tb.appendChild(tr);
-    });
-   }
-  }catch(e){tb.innerHTML=`<tr><td colspan=7 class="empty">${esc(e.message)}</td></tr>`}
+ });
 }
+$('histPrev').onclick=()=>{histPage--;renderHistPage()};
+$('histNext').onclick=()=>{histPage++;renderHistPage()};
 $('cInvCard').onclick=()=>showTab('cleanup');
 $('cLastCard').onclick=()=>{if(lastFailedRun)showRunLog(lastFailedRun);else showTab('history')};
 cardKey($('cInvCard'),()=>showTab('cleanup'));
