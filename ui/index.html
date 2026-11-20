@@ -183,15 +183,40 @@ input[type=text],input[type=password],input[type=number],input[type=url],input[t
 .tag-sel button:active{transform:scale(.96)}
 .tag-sel button.cur{border-color:var(--acc);color:var(--acc);background:var(--acc-bg);font-weight:600}
 .divider{border-top:1px solid var(--line);margin:1.25rem 0}
-/* cleanup tab */
-td.chk,th.chk{width:2.25rem;padding-right:0}
-tr.unsafe td:not(.chk){color:var(--mut)}
-#clImgRows td,#clNetRows td{white-space:nowrap}
-.cl-note{color:var(--mut);font-size:.78125rem;line-height:1.45}
-.cl-actions{position:sticky;bottom:1rem;z-index:3;margin-top:1.25rem;display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;
-  padding:.75rem 1rem;border-radius:var(--radius);border:1px solid var(--line);background:rgba(18,20,17,.92);
-  box-shadow:var(--shadow-float);-webkit-backdrop-filter:blur(1rem) saturate(160%);backdrop-filter:blur(1rem) saturate(160%)}
-.cl-actions .sum{font:500 .84375rem/1.4 var(--mono);flex:1;min-width:14rem}
+/* cleanup tab: one number, one button, details on demand */
+.cl-note{color:var(--mut);font-size:.8125rem;line-height:1.5}
+.cl-hero{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:1.5rem;padding:1.375rem 1.5rem}
+.cl-col{display:flex;flex-direction:column;gap:.5rem;min-width:0}
+.cl-free{border-left:1px solid var(--line);padding-left:1.5rem}
+.cl-big{font:600 2rem/1.1 var(--mono);letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.cl-acc{color:var(--acc)}
+.cl-bar{display:flex;height:.5rem;border-radius:999px;overflow:hidden;background:var(--panel2);margin-top:.25rem}
+.cl-bar span{display:block;height:100%}
+.cl-legend{display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.78125rem;color:var(--mut)}
+.cl-legend i{display:inline-block;width:.5rem;height:.5rem;border-radius:2px;margin-right:.375rem;vertical-align:.05rem}
+.cl-group{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);margin-top:.5rem}
+.cl-group>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:.75rem;padding:.875rem 1rem;flex-wrap:wrap}
+.cl-group>summary::-webkit-details-marker{display:none}
+.cl-group>summary::before{content:"›";color:var(--mut);font:600 1rem/1 var(--mono);transition:transform .18s var(--ease-out);width:.75rem}
+.cl-group[open]>summary::before{transform:rotate(90deg)}
+.cl-gname{font-weight:600;min-width:8rem}
+.cl-gsum{font:500 .8125rem/1.4 var(--mono);color:var(--txt)}
+.cl-gkept{font-size:.78125rem;color:var(--mut);margin-left:auto}
+.cl-items{border-top:1px solid var(--line);padding:.375rem .5rem .5rem;max-height:22rem;overflow:auto;overscroll-behavior:contain}
+.cl-item{display:grid;grid-template-columns:1.5rem minmax(0,1fr) 5rem minmax(0,1.2fr);align-items:center;gap:.5rem;
+  padding:.4375rem .5rem;border-radius:.375rem;font-size:.8125rem;cursor:pointer}
+@media (hover:hover){.cl-item:hover{background:var(--panel2)}}
+.cl-item .nm{font-family:var(--mono);font-size:.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cl-item .sz{text-align:right;font-variant-numeric:tabular-nums;color:var(--mut)}
+.cl-item .why{color:var(--mut);font-size:.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cl-item.kept .nm{color:var(--mut)}
+.cl-more{color:var(--mut);font-size:.75rem;padding:.375rem .5rem}
+.cl-tip{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:var(--radius);padding:.875rem 1rem;margin-top:.5rem;font-size:.84375rem}
+.cl-tip ul{margin:.375rem 0 0 1.125rem;color:var(--mut);font-size:.8125rem}
+.cl-tip details{margin-top:.5rem}
+.cl-tip summary{cursor:pointer;color:var(--acc);font-size:.8125rem}
+.cl-code{margin-top:.5rem;background:#070807;border:1px solid var(--line);border-radius:.5rem;padding:.625rem .75rem;font:.75rem/1.6 var(--mono);color:#c4cabd;white-space:pre;overflow:auto}
+.cl-adv summary{cursor:pointer;color:var(--mut);font-size:.8125rem}
 /* clickable surfaces get the same press feedback as buttons */
 .is-clickable{cursor:pointer;user-select:none}
 @media (hover:hover){.is-clickable:hover{border-color:var(--line-strong);background-color:var(--panel2)}}
@@ -224,7 +249,10 @@ tr.unsafe td:not(.chk){color:var(--mut)}
   header{padding:.625rem .875rem;position:static}
   nav{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;max-width:100%}
   nav::-webkit-scrollbar{display:none}
-  .cl-actions{position:static;box-shadow:none}
+  .cl-hero{grid-template-columns:1fr;padding:1.125rem}
+  .cl-free{border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:1rem}
+  .cl-item{grid-template-columns:1.5rem minmax(0,1fr) 4.5rem}
+  .cl-item .why{grid-column:2/4;white-space:normal}
   header h1{font-size:1rem}
   nav{margin-left:0}
   .modal-bg{padding:.75rem}
@@ -315,60 +343,44 @@ tr.unsafe td:not(.chk){color:var(--mut)}
 
 <!-- ============================================================== CLEANUP -->
 <div id="tab-cleanup" style="display:none" class="tab">
-  <div class="grid cards">
-    <div class="card"><div class="lbl">Unused images</div><div class="val" id="clImgN">–</div><div class="sub" id="clImgSub"></div></div>
-    <div class="card"><div class="lbl">Unused networks</div><div class="val" id="clNetN">–</div><div class="sub" id="clNetSub"></div></div>
-    <div class="card"><div class="lbl">Build cache</div><div class="val" id="clCache">–</div><div class="sub">reclaimable</div></div>
-    <div class="card"><div class="lbl">Shown only</div><div class="val" id="clKeepN">–</div><div class="sub" id="clKeepSub">stopped containers · unused volumes</div></div>
+  <div class="panel cl-hero">
+    <div class="cl-col">
+      <div class="lbl" style="color:var(--mut);font:500 .6875rem/1.4 var(--mono);text-transform:uppercase;letter-spacing:.08em">Docker uses</div>
+      <div class="cl-big" id="clTotal">–</div>
+      <div class="cl-bar" id="clBar" aria-hidden="true"></div>
+      <div class="cl-legend" id="clLegend"></div>
+    </div>
+    <div class="cl-col cl-free">
+      <div class="lbl" style="color:var(--mut);font:500 .6875rem/1.4 var(--mono);text-transform:uppercase;letter-spacing:.08em">Can be freed safely</div>
+      <div class="cl-big cl-acc" id="clFree">–</div>
+      <p class="cl-note">Leftovers only — nothing that holds data or is needed for a rollback.</p>
+      <div class="row" style="margin-top:.25rem">
+        <button class="btn" id="clRun" disabled>Free up space</button>
+        <button class="btn sec sm" id="clRefresh">Rescan</button>
+        <span class="mono" id="clInfo"></span>
+      </div>
+    </div>
   </div>
 
   <section>
-    <div class="spread"><h2>Unused images</h2>
-      <div class="row"><span class="mono" id="clInfo"></span>
-        <button class="btn sec sm" id="clRefresh">Refresh</button></div></div>
-    <div class="panel"><table>
-      <thead><tr><th class="chk"><input type="checkbox" id="clImgAll" aria-label="Select all safe images"></th><th>Image</th><th class="num">Size</th><th class="num">Age</th><th>Note</th></tr></thead>
-      <tbody id="clImgRows"><tr><td colspan=5 class="empty">Loading…</td></tr></tbody>
-    </table></div>
+    <h2>What gets removed</h2>
+    <p class="cl-note" style="margin-bottom:.25rem">Everything safe is already ticked. Open a group to see the items or to change the selection.</p>
+    <div id="clGroups"><div class="empty">Scanning…</div></div>
   </section>
 
-  <section>
-    <h2>Unused networks</h2>
-    <div class="panel"><table>
-      <thead><tr><th class="chk"><input type="checkbox" id="clNetAll" aria-label="Select all safe networks"></th><th>Network</th><th>Driver</th><th>Stack</th><th>Note</th></tr></thead>
-      <tbody id="clNetRows"><tr><td colspan=5 class="empty">Loading…</td></tr></tbody>
-    </table></div>
-    <p class="cl-note" style="margin-top:.5rem">Networks of stacks that still exist in Portainer are protected: the stack needs them to start again.</p>
+  <section id="clTipsSec" style="display:none">
+    <h2>Tips</h2>
+    <div id="clTips"></div>
   </section>
 
-  <div class="cl-actions">
-    <span class="sum" id="clSum">Nothing selected</span>
-    <label class="cl-note" style="display:flex;align-items:center;gap:.4rem"><input type="checkbox" id="clCacheSel"> also prune build cache</label>
-    <button class="btn sec sm" id="clSelSafe">Select all safe</button>
-    <button class="btn sm" id="clRun" disabled>Remove selected</button>
-  </div>
-
-  <section>
-    <h2>Shown, not removed</h2>
-    <p class="cl-note" style="margin-bottom:.625rem">Stopped containers are treated as <i>intentionally off</i>, and volumes hold data — Quaykeeper never deletes either. Remove them in Portainer if you really mean it.</p>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(22rem,1fr))">
-      <div class="panel"><table>
-        <thead><tr><th>Stopped container</th><th>Stack</th><th>Status</th></tr></thead>
-        <tbody id="clStopRows"><tr><td colspan=3 class="empty">Loading…</td></tr></tbody></table></div>
-      <div class="panel"><table>
-        <thead><tr><th>Unused volume</th><th>Stack</th><th>Driver</th></tr></thead>
-        <tbody id="clVolRows"><tr><td colspan=3 class="empty">Loading…</td></tr></tbody></table></div>
-    </div>
+  <section class="cl-adv">
+    <details><summary>Advanced</summary>
+      <div class="row" style="margin-top:.75rem">
+        <button class="btn danger sm" id="btnPrune">Prune all unused images</button>
+        <span class="cl-note">removes every unused image and the build cache — including the old versions a rollback needs</span>
+      </div>
+    </details>
   </section>
-
-  <section>
-    <h2>Prune everything</h2>
-    <div class="row">
-      <button class="btn danger" id="btnPrune">Prune all unused images</button>
-      <span class="cl-note">removes every unused image &amp; the build cache in one go — including previous versions a rollback would need</span>
-    </div>
-  </section>
-
 </div>
 
 <!-- ============================================================ SETTINGS -->
@@ -1344,98 +1356,148 @@ $('btnPrune').onclick=async()=>{
 
 
 /* ---------------------------------------------------------------- cleanup */
-let CL=null;const clSelImg=new Set(),clSelNet=new Set();
-const fmtMB=mb=>mb==null?'–':(mb>=1024?(mb/1024).toFixed(1)+' GB':Math.round(mb)+' MB');
-function ageOf(t){
- if(!t)return'–';
- const ms=typeof t==='number'?t*1000:Date.parse(t);if(!ms)return'–';
- const d=Math.max(0,Math.floor((Date.now()-ms)/86400000));
- return d<1?'today':d<60?d+'d':Math.round(d/30)+'mo';
+let CL=null;const clSel=new Set();   /* keys: 'image:<id>', 'volume:<name>', ... */
+const fmtMB=mb=>mb==null?'–':(mb>=1024?(mb/1024).toFixed(1)+' GB':(mb<1&&mb>0?'<1 MB':Math.round(mb)+' MB'));
+const CL_KINDS=[
+ {k:'image',title:'Images',list:()=>CL.images,key:i=>i.id,name:i=>i.tags[0]||'untagged image',size:i=>i.size_mb,
+  why:i=>i.safe?(i.dangling?'untagged leftover':'no longer used'):i.note},
+ {k:'volume',title:'Volumes',list:()=>CL.volumes||[],key:v=>v.name,name:v=>v.anonymous?'anonymous · '+v.name.slice(0,12):v.name,size:v=>v.size_mb,
+  why:v=>v.safe?'anonymous, nothing uses it':v.note},
+ {k:'container',title:'Old containers',list:()=>CL.containers||[],key:c=>c.id,name:c=>c.name,size:c=>c.size_mb,
+  why:c=>c.safe?'no stack · '+(c.status||'stopped'):c.note},
+ {k:'network',title:'Networks',list:()=>CL.networks,key:n=>n.id,name:n=>n.name,size:()=>null,
+  why:n=>n.safe?n.note:n.note},
+];
+function clItems(){ /* every removable item with its key */
+ const out=[];
+ CL_KINDS.forEach(K=>K.list().forEach(it=>out.push({K,it,key:K.k+':'+K.key(it)})));
+ if(CL.build_cache_mb)out.push({K:{k:'cache'},it:{safe:true,size_mb:CL.build_cache_mb},key:'cache:all'});
+ return out;
 }
+function clSelectSafe(){clSel.clear();clItems().forEach(x=>{if(x.it.safe)clSel.add(x.key)})}
 function clUpdate(){
- if(!CL){$('clRun').disabled=true;return}
- const imgs=CL.images.filter(i=>clSelImg.has(i.id)),nets=CL.networks.filter(n=>clSelNet.has(n.id));
- const mb=imgs.reduce((a,i)=>a+i.size_mb,0)+($('clCacheSel').checked?(CL.build_cache_mb||0):0);
- const parts=[];
- if(imgs.length)parts.push(imgs.length+' image'+(imgs.length>1?'s':''));
- if(nets.length)parts.push(nets.length+' network'+(nets.length>1?'s':''));
- if($('clCacheSel').checked)parts.push('build cache');
- $('clSum').textContent=parts.length?`${parts.join(' · ')} → frees ~${fmtMB(mb)}`:'Nothing selected';
- $('clRun').disabled=!parts.length||gateBusyFlag;
- $('clImgAll').checked=CL.images.some(i=>i.safe)&&CL.images.filter(i=>i.safe).every(i=>clSelImg.has(i.id));
- $('clNetAll').checked=CL.networks.some(n=>n.safe)&&CL.networks.filter(n=>n.safe).every(n=>clSelNet.has(n.id));
+ if(!CL){$('clRun').disabled=true;$('clRun').textContent='Free up space';return}
+ const sel=clItems().filter(x=>clSel.has(x.key));
+ const mb=sel.reduce((a,x)=>a+(x.it.size_mb||0),0);
+ $('clRun').textContent=sel.length?`Free up ${fmtMB(mb)}`:'Nothing selected';
+ $('clRun').disabled=!sel.length||gateBusyFlag;
+ CL_KINDS.forEach(K=>{
+  const el=document.querySelector(`[data-clsum="${K.k}"]`);if(!el)return;
+  const items=K.list(),n=items.filter(i=>clSel.has(K.k+':'+K.key(i)));
+  const sized=items.some(i=>K.size(i)!=null);
+  el.textContent=`${n.length} of ${items.length} selected`+(sized?` · ${fmtMB(n.reduce((a,i)=>a+(K.size(i)||0),0))}`:'');
+ });
+ const cs=document.querySelector('[data-clsum="cache"]');
+ if(cs)cs.textContent=clSel.has('cache:all')?`selected · ${fmtMB(CL.build_cache_mb)}`:'not selected';
 }
-function clRow(set,item,cells,label){
- const tr=document.createElement('tr');if(!item.safe)tr.className='unsafe';
- tr.innerHTML=`<td class="chk"><input type="checkbox"></td>${cells}`;
- const cb=tr.querySelector('input');cb.checked=set.has(item.id);
- cb.setAttribute('aria-label',`Select ${label}`+(item.safe?'':` (not safe: ${item.note})`));
- cb.onchange=()=>{cb.checked?set.add(item.id):set.delete(item.id);clUpdate()};
- return tr;
+function clRenderGroups(){
+ const box=$('clGroups');box.innerHTML='';
+ let any=false;
+ CL_KINDS.forEach(K=>{
+  const items=K.list();if(!items.length)return;any=true;
+  const kept=items.filter(i=>!i.safe).length;
+  const d=document.createElement('details');d.className='cl-group';
+  d.innerHTML=`<summary><span class="cl-gname">${K.title}</span><span class="cl-gsum" data-clsum="${K.k}"></span>`+
+   (kept?`<span class="cl-gkept">${kept} kept</span>`:'')+`</summary><div class="cl-items"></div>`;
+  /* rows are built on first open: 400 volumes must not slow the tab down */
+  d.addEventListener('toggle',()=>{if(!d.open||d._built)return;d._built=true;
+   const list=d.querySelector('.cl-items');
+   items.forEach(it=>{
+    const key=K.k+':'+K.key(it);
+    const row=document.createElement('label');row.className='cl-item'+(it.safe?'':' kept');
+    row.innerHTML=`<input type="checkbox"><span class="nm" title="${esc(K.key(it))}"></span><span class="sz">${K.size(it)==null?'':fmtMB(K.size(it))}</span><span class="why"></span>`;
+    row.querySelector('.nm').textContent=K.name(it);
+    row.querySelector('.why').textContent=K.why(it)||'';
+    const cb=row.querySelector('input');cb.checked=clSel.has(key);
+    cb.setAttribute('aria-label',`Remove ${K.name(it)}`+(it.safe?'':` (kept: ${it.note})`));
+    cb.onchange=()=>{cb.checked?clSel.add(key):clSel.delete(key);clUpdate()};
+    list.appendChild(row);
+   });
+  });
+  box.appendChild(d);
+ });
+ if(CL.build_cache_mb){any=true;
+  const d=document.createElement('div');d.className='cl-group';
+  d.innerHTML=`<label class="cl-item" style="padding:.875rem 1rem"><input type="checkbox" id="clCache"><span class="nm" style="font-family:var(--font);font-size:.84375rem;font-weight:600">Build cache</span><span class="sz">${fmtMB(CL.build_cache_mb)}</span><span class="why" data-clsum="cache"></span></label>`;
+  box.appendChild(d);
+  const cb=d.querySelector('input');cb.checked=clSel.has('cache:all');
+  cb.onchange=()=>{cb.checked?clSel.add('cache:all'):clSel.delete('cache:all');clUpdate()};
+ }
+ const stopped=(CL.stopped_containers||[]).filter(c=>c.project).length;
+ if(stopped){const p=document.createElement('p');p.className='cl-note';p.style.marginTop='.625rem';
+  p.textContent=`${stopped} stopped container(s) belong to a stack — they are off on purpose and left alone.`;box.appendChild(p)}
+ if(!any)box.innerHTML='<div class="empty">Nothing to clean up — all tidy.</div>';
+}
+function clRenderTips(){
+ const tips=CL.hints||[],box=$('clTips');box.innerHTML='';
+ $('clTipsSec').style.display=tips.length?'':'none';
+ const anon=tips.filter(t=>t.kind==='anon_volume');
+ if(anon.length){
+  const t=document.createElement('div');t.className='cl-tip';
+  t.innerHTML=`<b>Leftover volumes come back after every update</b>
+   <div class="cl-note" style="margin-top:.25rem">These containers keep a path in an anonymous volume. Each update creates a new one and leaves the old one behind.</div>
+   <ul></ul><details><summary>How to fix</summary><div class="cl-note" style="margin-top:.375rem">Give the path a named volume in the stack's compose file, e.g.:</div><pre class="cl-code"></pre></details>`;
+  const ul=t.querySelector('ul');
+  anon.forEach(h=>{const li=document.createElement('li');li.textContent=`${h.container} → ${h.path}`+(h.stack?` (stack ${h.stack})`:'');ul.appendChild(li)});
+  t.querySelector('pre').textContent=`services:\n  ${anon[0].container}:\n    ${anon[0].fix.replace(/\n/g,'\n    ')}\n\nvolumes:\n  ${anon[0].fix.split('- ')[1].split(':')[0]}:`;
+  box.appendChild(t);
+ }
+ tips.filter(t=>t.kind==='log_limit').forEach(h=>{
+  const t=document.createElement('div');t.className='cl-tip';
+  t.innerHTML=`<b>Logs without a size limit</b><div class="cl-note" style="margin-top:.25rem"></div>
+   <details><summary>How to fix</summary><div class="cl-note" style="margin-top:.375rem">Add to each service (or set it once for all containers in Docker's daemon.json):</div><pre class="cl-code"></pre></details>`;
+  t.querySelector('.cl-note').textContent=`${h.containers.length} container(s) keep their logs forever: ${h.containers.slice(0,8).join(', ')}${h.containers.length>8?' …':''}`;
+  t.querySelector('pre').textContent=h.fix;
+  box.appendChild(t);
+ });
+}
+function clRenderUsage(){
+ const u=CL.usage||{};
+ $('clTotal').textContent=u.total_mb!=null?fmtMB(u.total_mb):'–';
+ $('clFree').textContent=fmtMB(CL.safe_total_mb);
+ const parts=[['Images',u.images_mb,'var(--acc)'],['Volumes',u.volumes_mb,'var(--ok)'],['Containers',u.containers_mb,'var(--warn)'],['Build cache',u.build_cache_mb,'var(--mut)']];
+ const tot=u.total_mb||0;
+ $('clBar').innerHTML=tot?parts.map(([,v,c])=>`<span style="width:${(v||0)/tot*100}%;background:${c}"></span>`).join(''):'';
+ $('clLegend').innerHTML=tot?parts.map(([n,v,c])=>`<span><i style="background:${c}"></i>${n} ${fmtMB(v)}</span>`).join(''):'<span>disk usage unavailable</span>';
 }
 async function loadCleanup(){
  $('clInfo').textContent='scanning…';
  try{CL=await api('/api/cleanup')}
  catch(e){
-  /* a failed scan must not leave the previous selection armed */
-  CL=null;clSelImg.clear();clSelNet.clear();$('clCacheSel').checked=false;
-  $('clInfo').textContent='scan failed';
-  ['clImgN','clNetN','clCache','clKeepN'].forEach(id=>$(id).textContent='–');
-  ['clImgRows','clNetRows'].forEach(id=>$(id).innerHTML=`<tr><td colspan=5 class="empty">${esc(e.message)}</td></tr>`);
-  ['clStopRows','clVolRows'].forEach(id=>$(id).innerHTML=`<tr><td colspan=3 class="empty">${esc(e.message)}</td></tr>`);
-  clUpdate();return}
- $('clInfo').textContent='scanned '+new Date(CL.analyzed_at*1000).toLocaleTimeString();
- const ids=new Set(CL.images.map(i=>i.id)),nids=new Set(CL.networks.map(n=>n.id));
- [...clSelImg].forEach(i=>ids.has(i)||clSelImg.delete(i));[...clSelNet].forEach(i=>nids.has(i)||clSelNet.delete(i));
- const safeMB=CL.safe_images_mb, prot=CL.networks.filter(n=>!n.safe).length;
- $('clImgN').textContent=CL.images.length;$('clImgSub').textContent=fmtMB(safeMB)+' safe to remove';
- $('clNetN').textContent=CL.networks.length;$('clNetSub').textContent=prot?prot+' protected':'none protected';
- $('clCache').textContent=fmtMB(CL.build_cache_mb);
- const vols=CL.volumes||[];
- $('clKeepN').textContent=CL.stopped_containers.length+' · '+vols.length;
- const it=$('clImgRows');it.innerHTML='';
- if(!CL.images.length)it.innerHTML='<tr><td colspan=5 class="empty">No unused images.</td></tr>';
- CL.images.forEach(i=>it.appendChild(clRow(clSelImg,i,
-  `<td class="mono" title="${esc(i.id)}">${i.safe?'':'<span class="badge b-warn">rollback</span> '}${esc(i.tags[0]||'<untagged> '+i.id.slice(7,19))}${i.tags.length>1?' <span class="badge b-mut">+'+(i.tags.length-1)+'</span>':''}</td>
-   <td class="num">${fmtMB(i.size_mb)}</td><td class="num">${ageOf(i.created)}</td>
-   <td>${i.safe?(i.dangling?'<span class="badge b-mut">dangling</span>':''):'<span class="cl-note">'+esc(i.note)+'</span>'}</td>`,
-  i.tags[0]||'untagged image')));
- const nt=$('clNetRows');nt.innerHTML='';
- if(!CL.networks.length)nt.innerHTML='<tr><td colspan=5 class="empty">No unused networks.</td></tr>';
- CL.networks.forEach(n=>nt.appendChild(clRow(clSelNet,n,
-  `<td class="mono">${n.safe?'':'<span class="badge b-info">protected</span> '}${esc(n.name)}</td><td>${esc(n.driver||'–')}</td><td>${esc(n.project||'–')}</td>
-   <td><span class="cl-note">${esc(n.note)}</span></td>`,
-  'network '+n.name)));
- const st=$('clStopRows');
- st.innerHTML=CL.stopped_containers.length?CL.stopped_containers.map(c=>`<tr><td class="mono">${esc(c.name)}</td><td>${esc(c.project||'–')}</td><td class="cl-note">${esc(c.status||c.state||'')}</td></tr>`).join(''):'<tr><td colspan=3 class="empty">No stopped containers.</td></tr>';
- const vt=$('clVolRows');
- vt.innerHTML=CL.volumes==null?'<tr><td colspan=3 class="empty">Volumes unavailable.</td></tr>':vols.length?vols.map(v=>`<tr><td class="mono">${esc(v.name)}</td><td>${esc(v.project||'–')}</td><td>${esc(v.driver||'–')}</td></tr>`).join(''):'<tr><td colspan=3 class="empty">No unused volumes.</td></tr>';
- clUpdate();
+  CL=null;clSel.clear();clUpdate();
+  $('clInfo').textContent='';['clTotal','clFree'].forEach(id=>$(id).textContent='–');
+  $('clGroups').innerHTML=`<div class="empty">${esc(e.message)}</div>`;$('clTipsSec').style.display='none';
+  return}
+ $('clInfo').textContent='';
+ clSelectSafe();clRenderUsage();clRenderGroups();clRenderTips();clUpdate();
 }
 $('clRefresh').onclick=loadCleanup;
-$('clCacheSel').onchange=clUpdate;
-$('clImgAll').onchange=e=>{CL&&CL.images.filter(i=>i.safe).forEach(i=>e.target.checked?clSelImg.add(i.id):clSelImg.delete(i.id));loadCleanupRowsOnly()};
-$('clNetAll').onchange=e=>{CL&&CL.networks.filter(n=>n.safe).forEach(n=>e.target.checked?clSelNet.add(n.id):clSelNet.delete(n.id));loadCleanupRowsOnly()};
-$('clSelSafe').onclick=()=>{if(!CL)return;CL.images.filter(i=>i.safe).forEach(i=>clSelImg.add(i.id));CL.networks.filter(n=>n.safe).forEach(n=>clSelNet.add(n.id));loadCleanupRowsOnly()};
-function loadCleanupRowsOnly(){
- document.querySelectorAll('#clImgRows tr,#clNetRows tr').forEach(tr=>{
-  const cb=tr.querySelector('input');if(!cb)return;
-  const isImg=tr.parentElement.id==='clImgRows',list=isImg?CL.images:CL.networks,set=isImg?clSelImg:clSelNet;
-  const idx=[...tr.parentElement.children].indexOf(tr);cb.checked=set.has(list[idx].id);
- });
- clUpdate();
+async function waitForRun(runId){
+ for(let i=0;i<600;i++){
+  await sleep(1500);
+  try{const cur=await api('/api/runs/current');if(!cur.active||cur.run_id!==runId)break}catch(_){}
+ }
+ try{const h=(await api('/api/history')).history||[];return h.reverse().find(r=>r.run_id===runId)}catch(_){return null}
 }
 $('clRun').onclick=async()=>{
  if(!CL)return;
- const imgs=CL.images.filter(i=>clSelImg.has(i.id)),nets=CL.networks.filter(n=>clSelNet.has(n.id));
- const risky=imgs.filter(i=>!i.safe).length+nets.filter(n=>!n.safe).length;
- if(!confirm(`Remove ${$('clSum').textContent}?`+(risky?`\n\n${risky} selected item(s) are not marked safe (rollback image / network of an existing stack).`:'')))return;
+ const sel=clItems().filter(x=>clSel.has(x.key));
+ const n=k=>sel.filter(x=>x.K.k===k).length;
+ const parts=[['image','image'],['volume','volume'],['container','container'],['network','network']]
+  .filter(([k])=>n(k)).map(([k,w])=>`${n(k)} ${w}${n(k)>1?'s':''}`);
+ if(clSel.has('cache:all'))parts.push('the build cache');
+ const kept=sel.filter(x=>!x.it.safe);
+ const mb=sel.reduce((a,x)=>a+(x.it.size_mb||0),0);
+ if(!confirm(`Remove ${parts.join(', ')}?\n\nFrees about ${fmtMB(mb)}.`+(kept.length?`\n\n⚠ ${kept.length} of them are marked "kept" (data or rollback). They cannot be restored.`:'')))return;
+ const ids=k=>sel.filter(x=>x.K.k===k).map(x=>x.key.slice(k.length+1));
  const b=$('clRun');b.dataset.busy='1';b.disabled=true;
  try{
-  const r=await api('/api/cleanup',{method:'POST',body:JSON.stringify({images:imgs.map(i=>i.id),networks:nets.map(n=>n.id),build_cache:$('clCacheSel').checked})});
-  toast(r.ok?'Cleanup done - logged in History':'Cleanup finished with warnings - see History',r.ok?'ok':'err');
-  clSelImg.clear();clSelNet.clear();$('clCacheSel').checked=false;
-  await loadCleanup();
+  const r=await api('/api/cleanup',{method:'POST',body:JSON.stringify({images:ids('image'),volumes:ids('volume'),
+   containers:ids('container'),networks:ids('network'),build_cache:clSel.has('cache:all')})});
+  $('clInfo').textContent='cleaning up…';
+  const res=await waitForRun(r.run_id);
+  toast(res&&res.success?'Cleanup done':'Cleanup finished with warnings — see History',res&&res.success?'ok':'err');
+  await loadCleanup();refresh();
  }catch(e){toast(e.message,'err')}
  finally{delete b.dataset.busy;clUpdate()}
 };

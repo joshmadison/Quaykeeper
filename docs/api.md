@@ -18,8 +18,8 @@ Every UI action is an API call, so scripts and dashboards can use it too.
 | `POST` | `/api/check` | Force an update check |
 | `POST` | `/api/update` | Start a full update run |
 | `POST` | `/api/prune` | Prune images and build cache now |
-| `GET` | `/api/cleanup` | Unused images/networks (with safe flags), stopped containers, unused volumes, build cache |
-| `POST` | `/api/cleanup` | Remove picked items: `{"images":[ids],"networks":[ids],"build_cache":true}` |
+| `GET` | `/api/cleanup` | Disk usage, unused images/volumes/networks/old containers with `safe` flags, tips |
+| `POST` | `/api/cleanup` | Remove picked items in the background: `{"images":[ids],"volumes":[names],"containers":[ids],"networks":[ids],"build_cache":true}` |
 | `POST` | `/api/self_update` | Redeploy Quaykeeper's own stack |
 | `GET` | `/api/inventory` | Unused images and networks |
 | `GET` | `/api/runs/current` | Live progress of the active job |

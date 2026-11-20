@@ -53,11 +53,10 @@ every run. Self-hosted — no accounts, no cloud, no telemetry.
 - **Version pinning with real tags.** Pin a service to a specific tag (or move
   it back to `latest`) and the compose file is edited in Portainer and the
   stack redeployed — no copy-pasting YAML.
-- **Cleanup with restraint.** Every run prunes unused images and build cache.
-  The **Cleanup** tab shows what else is lying around — leftover images and
-  networks — and removes exactly what you pick. Rollback images and networks
-  of existing stacks are flagged; stopped containers and volumes are never
-  touched.
+- **Cleanup in one click.** The **Cleanup** tab shows how much disk Docker
+  uses and how much can be freed safely — leftover images, anonymous volumes,
+  old one-off containers, orphaned networks, build cache — and frees it with
+  one button. Anything that holds data or is needed for a rollback is kept.
 - **A history that answers questions.** Steps, duration, live log, success
   rate and 30-day reclaimed space. Runs that were cut short by a restart are
   marked *interrupted* instead of being counted as failures.

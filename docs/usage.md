@@ -75,25 +75,33 @@ How the rollback point works:
 ## Cleanup
 
 Every full run already prunes unused images and the build cache. The
-**Cleanup** tab is for everything else that piles up over time — and for
-removing it on your terms:
+**Cleanup** tab is for everything else that piles up — one number, one button:
 
 <p align="center">
-  <img src="screenshots/cleanup.png" alt="Cleanup tab: unused images and networks with checkboxes, rollback and protected markers, and the selection summary" width="100%">
+  <img src="screenshots/cleanup.png" alt="Cleanup tab: Docker disk usage, the amount that can be freed safely with one button, and groups of leftovers" width="100%">
 </p>
 
-- **Unused images**, largest first. An image that is the previous version of a
-  stack is marked *rollback*: removing it means a rollback has to pull it again.
-- **Unused networks.** Networks of stacks that still exist in Portainer are
-  *protected* — the stack needs them to start again. Orphaned compose networks
-  and hand-made ones are safe.
-- **Select all safe** picks everything that is not flagged; the bar shows what
-  the selection frees. Optionally prune the build cache with it.
-- Items are removed one by one and re-checked first: anything that is in use
-  again by then is skipped, and nothing is forced. Each cleanup is a run in the
-  history, with its log.
-- **Stopped containers** and **unused volumes** are listed, never removed:
-  stopped means *intentionally off*, and volumes hold data.
+- **Docker uses** shows the disk usage by images, volumes, containers and build
+  cache. **Can be freed safely** is what one click on **Free up space** removes.
+- Everything safe is ticked already. Open a group to see the items or change
+  the selection:
+  - **Images** no container uses. Previous versions a rollback needs are *kept*.
+  - **Volumes** — anonymous volumes nothing uses (typically left behind by
+    updates) are safe. Named volumes hold data and are *kept*.
+  - **Old containers** — stopped containers that belong to no stack and ended
+    more than 30 days ago (`docker run` without `--rm`). Containers of a stack
+    are never touched: stopped means *intentionally off*.
+  - **Networks** no container is attached to. Networks of existing stacks,
+    `external` networks and macvlan/ipvlan networks are *kept*.
+  - **Build cache.**
+- You can tick *kept* items on purpose; the confirmation says how many and that
+  they can't be restored.
+- Items are removed one by one and re-checked first; nothing is forced. Each
+  cleanup is a run in the history, with its log.
+- **Tips** point at the causes: containers that keep a path in an anonymous
+  volume (each update leaves one behind — the update log warns too) and
+  containers whose logs have no size limit, each with the compose snippet that
+  fixes it.
 
 ## History
 
