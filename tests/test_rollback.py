@@ -151,40 +151,55 @@ class TestRollbackStack:
 
 
 class TestSnapshotsInRedeploy:
-    def test_redeploy_captures_snapshot(self, fake_client, tmp_state, monkeypatch):
-        from app import snapshots as s
-        from app.updater import redeploy_single_stack
-        compose = "services:\n  a:\n    image: nginx:1.0\n"
-        stack = {"Id": 5, "Name": "snap_stack", "EndpointId": 3, "Env": [],
-                 "GitConfig": None}
-        c = fake_client(stacks=[stack], stack_files={5: compose})
+    """The rollback point is the state BEFORE an update that really changed
+    an image, pinned to the digest that ran - not a copy of the compose
+    file taken on every run."""
+    COMPOSE = "services:\n  a:\n    image: nginx:1.0\n"
+
+    def _setup(self, fake_client, monkeypatch, name, change):
+        stack = {"Id": 5, "Name": name, "EndpointId": 3, "Env": [], "GitConfig": None}
+        ctr = {"Id": "c1", "State": "running", "ImageID": "sha256:old",
+               "Labels": {"com.docker.compose.project": name,
+                          "com.docker.compose.service": "a"}}
+        c = fake_client(containers=[ctr], stacks=[stack], stack_files={5: self.COMPOSE})
+        c.image_inspect = lambda iid, eid=None: {
+            "RepoDigests": ["nginx@sha256:" + "a" * 64] if iid == "sha256:old" else []}
+
+        def update(sid, eid, content, env):
+            if change:
+                ctr["ImageID"] = "sha256:new"
+        c.update_stack = update
         monkeypatch.setattr(
             "app.updater._containers_ready",
             lambda client, project, eid, log=None, created_after=None: (1, 1))
+        return c, stack
+
+    def test_snapshot_saved_when_image_changed(self, fake_client, tmp_state, monkeypatch):
+        from app import snapshots as s
+        from app.updater import redeploy_single_stack
+        c, stack = self._setup(fake_client, monkeypatch, "snap_stack", change=True)
         logs = []
-        assert redeploy_single_stack(c, stack, 3, lambda m: logs.append(m)) is True
-        snap = s.get_snapshot("snap_stack")
-        assert snap is not None
-        assert snap["images"]["a"] == "nginx:1.0"
-        assert any("snapshot captured" in l for l in logs)
+        assert redeploy_single_stack(c, stack, 3, logs.append) is True
+        assert s.get_snapshot("snap_stack")["images"]["a"] == "nginx:1.0@sha256:" + "a" * 64
+        assert any("rollback point saved" in l for l in logs)
+
+    def test_unchanged_run_keeps_previous_snapshot(self, fake_client, tmp_state, monkeypatch):
+        from app import snapshots as s
+        from app.updater import redeploy_single_stack
+        s.snapshot_stack("keep", 3, {"a": "nginx:0.9"})
+        c, stack = self._setup(fake_client, monkeypatch, "keep", change=False)
+        assert redeploy_single_stack(c, stack, 3, lambda m: None) is True
+        assert s.get_snapshot("keep")["images"]["a"] == "nginx:0.9"
 
     def test_snapshot_failure_never_kills_run(self, fake_client, tmp_state, monkeypatch):
         from app import snapshots as s
         from app.updater import redeploy_single_stack
-        compose = "services:\n  a:\n    image: nginx:1.0\n"
-        stack = {"Id": 5, "Name": "snapfail", "EndpointId": 3, "Env": [],
-                 "GitConfig": None}
-        c = fake_client(stacks=[stack], stack_files={5: compose})
-        monkeypatch.setattr(
-            "app.updater._containers_ready",
-            lambda client, project, eid, log=None, created_after=None: (1, 1))
-
-        def boom(*a, **kw):
-            raise OSError("disk full")
-        monkeypatch.setattr(s, "snapshot_stack", boom)
+        c, stack = self._setup(fake_client, monkeypatch, "snapfail", change=True)
+        monkeypatch.setattr(s, "snapshot_stack",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
         logs = []
-        assert redeploy_single_stack(c, stack, 3, lambda m: logs.append(m)) is True
-        assert any("rollback snapshot failed" in l for l in logs)
+        assert redeploy_single_stack(c, stack, 3, logs.append) is True
+        assert any("rollback point not saved" in l for l in logs)
 
 
 class TestRollbackApi:

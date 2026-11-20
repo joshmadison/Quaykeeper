@@ -66,12 +66,18 @@ def collect_images(client: Portainer, eid, log=None) -> list:
 
 
 def local_digests(client: Portainer, eid) -> dict:
-    """container Image ref -> RepoDigests (all containers, incl. stopped)."""
+    """container Image ref -> RepoDigests of the image the container RUNS.
+
+    Inspecting by ImageID, not by the Image text: the text names the tag,
+    which may already point to a newer pulled image while the container
+    still runs the old one (stopped stack, failed deploy) - that reported
+    'up to date' for an outdated container. Running containers first."""
     digests = {}
     try:
         cs = client.all_containers(eid)
     except PortainerError:
         return digests
+    cs = sorted(cs, key=lambda c: c.get("State") != "running")
     for c in cs:
         img = c.get("Image")
         if not img or "${" in img:
@@ -79,7 +85,7 @@ def local_digests(client: Portainer, eid) -> dict:
         if img in digests:
             continue
         try:
-            insp = client.image_inspect(img, eid)
+            insp = client.image_inspect(c.get("ImageID") or img, eid)
             digests[img] = insp.get("RepoDigests") or []
         except PortainerError:
             continue
@@ -93,9 +99,15 @@ def _match_local_digest(image_resolved, digests) -> str | None:
     reg, repo, _tag = dockerhub.parse_image(image_resolved)
     if repo is None:
         return None
-    for container_img, rds in digests.items():
+    # exact tag first: postgres:latest and postgres:alpine on one host must
+    # not borrow each other's digest; another tag of the same repo is only
+    # a fallback (container not yet recreated after a compose edit)
+    def order(item):
+        _r, _p, t = dockerhub.parse_image(item[0].split("@")[0])
+        return t != _tag
+    for container_img, rds in sorted(digests.items(), key=order):
         c_reg, c_repo, _ = dockerhub.parse_image(container_img.split("@")[0])
-        if c_repo != repo:
+        if c_repo != repo or (c_reg and reg and c_reg != reg):
             continue
         for rd in rds:
             # RepoDigests look like 'repo@sha256:...' or 'library/repo@sha256:...'

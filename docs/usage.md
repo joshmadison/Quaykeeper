@@ -58,6 +58,20 @@ button.
   <sub>Pin a version, redeploy one stack, or restore the images from before the last update.</sub>
 </p>
 
+How the rollback point works:
+
+- It is saved when an update **actually changes** an image of the stack, and
+  when you pin a version. A run that changes nothing keeps the previous point.
+- It records the exact image that ran, as `repo:tag@sha256:…` — a `:latest`
+  stack rolls back to the real previous image, not to whatever `latest` means
+  today. After a restore the stack stays pinned to that digest until you pick
+  a version again.
+- The automatic prune of an update run keeps these images, so a restore never
+  has to hope the old version is still on the registry. Only **Prune all
+  unused images** in the Cleanup tab removes them, and it says so.
+- Stacks deployed from git can't be pinned or rolled back here — the
+  repository is the source of truth.
+
 ## Cleanup
 
 Every full run already prunes unused images and the build cache. The

@@ -427,9 +427,20 @@ def api_stack_set_image(stack_id):
         stack = next((s for s in stacks if s["Id"] == stack_id), None)
         if not stack:
             return _err("stack not found", 404)
+        if stack.get("GitConfig"):
+            # a StackFileContent PUT would detach the stack from its repo
+            return _err("this stack is deployed from git - change the image "
+                        "in the repository instead", 409)
         content = client.stack_file(stack_id, eid)
         new_content = compose_mod.set_image(content, service, image)
-        client.update_stack(stack_id, eid, new_content, stack.get("Env") or [])
+        name = stack.get("Name") or f"stack-{stack_id}"
+        project = updater._project_name(name)
+        env = stack.get("Env") or []
+        # the state before the pin is a rollback point by definition
+        pre = updater._running_state(client, project, eid, content, env)
+        client.update_stack(stack_id, eid, new_content, env)
+        updater._commit_snapshot(client, name, project, eid, pre,
+                                 lambda m: None, force=True)
         return jsonify({"ok": True, "service": service, "image": image,
                         "redeployed": True})
     except (ValueError, PortainerError) as e:
@@ -693,7 +704,8 @@ def api_prune():
     eid = client.endpoint_id
 
     def work(rl):
-        ok = updater.cleanup_docker(client, eid, rl.log)
+        # 'Prune all' is the explicit everything-button: rollback images too
+        ok = updater.cleanup_docker(client, eid, rl.log, keep_rollback=False)
         rl.step("docker_prune", ok)
         return ok
     return _job("prune", "prune", work, background=True)

@@ -185,7 +185,7 @@ def backup_portainer(client: Portainer, log, backup_dir) -> bool:
 
 
 # --------------------------------------------------------------------- cleanup
-def cleanup_docker(client: Portainer, eid, log) -> bool:
+def cleanup_docker(client: Portainer, eid, log, keep_rollback: bool = True) -> bool:
     """Image + buildcache prune ONLY - via the Portainer API (admin key).
 
     The bash script ran `docker system prune -af`, which also deletes STOPPED
@@ -195,6 +195,8 @@ def cleanup_docker(client: Portainer, eid, log) -> bool:
     Portainer API: POST /images/prune (dangling=false) + POST /build/prune
     (all=true). NOTE: both require an ADMIN Portainer API key.
     """
+    if keep_rollback:
+        return _prune_keep_rollback(client, eid, log)
     log("Pruning unused images and build cache (via Portainer API)...")
     try:
         img = client.prune_images(eid)
@@ -222,6 +224,48 @@ def cleanup_docker(client: Portainer, eid, log) -> bool:
         log(f"[WARN] prune stats not recorded: {e}")
     return True
 
+
+
+def _prune_keep_rollback(client, eid, log) -> bool:
+    """The automatic prune of an update run: removes every unused image
+    EXCEPT the ones a rollback snapshot needs (a plain images/prune deleted
+    exactly the previous versions 'Restore' would bring back), plus the
+    build cache. Same safety rules as the Cleanup tab."""
+    from . import cleanup
+    log("Pruning unused images and build cache (keeping rollback images)...")
+    try:
+        found = cleanup.analyze(client, eid, networks=False)
+    except PortainerError as e:
+        log(f"[WARN] Prune skipped - could not list images: {e}")
+        return False
+    removed, freed, failed = 0, 0.0, 0
+    kept = [i for i in found["images"] if not i["safe"]]
+    for img in found["images"]:
+        if not img["safe"]:
+            continue
+        try:
+            cleanup.remove_image(client, eid, img)
+            removed += 1
+            freed += img["size_mb"]
+        except PortainerError as e:
+            failed += 1
+            log(f"[INFO] image {(img['tags'] or [img['id'][:19]])[0]} not removed: "
+                f"{str(e)[:120]}")
+    cache_mb = 0
+    try:
+        bld = client.prune_build_cache(eid)
+        cache_mb = (bld.get("SpaceReclaimed") or 0) // (1024 * 1024)
+    except PortainerError as e:
+        log(f"[WARN] Build-cache prune failed: {e}")
+    total = int(freed) + cache_mb
+    log(f"[OK] Prune completed: {removed} image(s), ~{total} MB reclaimed"
+        + (f", {len(kept)} kept for rollback" if kept else "") + ".")
+    try:
+        from .history import record_prune_stats
+        record_prune_stats(reclaimed_mb=total, images_deleted=removed)
+    except Exception as e:  # noqa: BLE001 - stats must never kill the run
+        log(f"[WARN] prune stats not recorded: {e}")
+    return failed == 0 or removed > 0
 
 # --------------------------------------------------------------------- stacks
 def _stack_env(stack):
@@ -261,12 +305,37 @@ def _expected_services(compose_text, env):
         return -1  # unknown -> be lenient
 
 
+def _own_container_id() -> str:
+    """This container's ID (or its 12-char prefix), '' outside Docker.
+
+    /proc/self/mountinfo carries Docker's per-container bind mounts
+    (.../containers/<64 hex id>/hostname|hosts|resolv.conf) - works with
+    named volumes, custom hostnames and any data-root. Fallback: the
+    default hostname IS the 12-char ID."""
+    try:
+        with open("/proc/self/mountinfo", encoding="utf-8") as f:
+            for line in f:
+                m = re.search(r"/containers/([0-9a-f]{64})/(?:hostname|hosts|resolv\.conf)", line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    import socket
+    try:
+        h = socket.gethostname().lower()
+    except OSError:
+        return ""
+    return h if re.fullmatch(r"[0-9a-f]{12,64}", h) else ""
+
+
 def _self_stack_names(client, eid) -> list:
     """Detect the compose project(s) that RUN this service (if any), so the
     engine can exclude them from update runs (redeploying the running
     service itself would kill this process mid-verification).
 
-    Deterministic detection - two signals, either matches:
+    Deterministic detection - any signal matches:
+    0. Container ID: our own ID (from mountinfo / default hostname) -
+       works with the shipped compose file (named volume for /app/data).
     1. Mount identity: this container's /app/data bind-mount host path
        (read from /proc/self/mountinfo) is compared against every
        container's inspect() Mounts - THE definitive signal, immune to
@@ -293,11 +362,17 @@ def _self_stack_names(client, eid) -> list:
         cs = client.all_containers(eid)
     except PortainerError:
         return sorted(names)
+    own_id = _own_container_id()
     for c in cs:
         lbl = ((c.get("Labels") or {}).get("com.docker.compose.project") or "").lower()
         if not lbl:
             continue
         cid = c.get("Id")
+        # signal 0: it is this very container
+        if own_id and (cid or "").startswith(own_id[:12]) and \
+                (len(own_id) == 12 or cid == own_id):
+            names.add(lbl)
+            continue
         # signal 1: same /app/data bind source
         if own_source:
             try:
@@ -325,12 +400,23 @@ def redeploy_single_stack(client, stack, eid, log) -> bool:
     project = _project_name(name)
     log(f"Processing stack: {name} (ID: {sid})")
 
-    # intentionally stopped? containers exist, none running
+    # intentionally stopped? containers exist, none running. A crash loop
+    # ('restarting') is NOT intent - redeploy it, an update may be the fix.
     try:
         cs = client.containers_by_project(project, eid)
-        if cs and not any(c.get("State") == "running" for c in cs):
-            log(f"[INFO] {name}: {len(cs)} container(s) but none running -> intentionally stopped, skipping.")
+        if cs and not any(c.get("State") in ("running", "restarting") for c in cs):
+            crashed = [c for c in cs if c.get("State") == "exited"
+                       and not re.search(r"Exited \((0|130|137|143)\)", c.get("Status") or "")]
+            if crashed:
+                log(f"[WARN] {name}: stopped, and {len(crashed)} container(s) exited "
+                    f"with an error ({crashed[0].get('Status')}) - looks crashed, "
+                    f"not touched. Check the stack.")
+            else:
+                log(f"[INFO] {name}: {len(cs)} container(s) but none running -> "
+                    f"intentionally stopped, skipping.")
             return True
+        if any(c.get("State") == "restarting" for c in cs or []):
+            log(f"[WARN] {name}: container(s) in a restart loop - redeploying.")
     except PortainerError as e:
         log(f"[WARN] {name}: container check failed ({e}), continuing.")
 
@@ -349,41 +435,38 @@ def redeploy_single_stack(client, stack, eid, log) -> bool:
         log(f"[INFO] {name}: 0 services defined -> inactive, skipping.")
         return True
 
-    # persist the pre-update image state as THE rollback target for this
-    # stack - "restore last healthy" then means: set these images back.
-    # Only meaningful if the redeploy later succeeds; a failed deploy leaves
-    # the previous snapshot untouched (the snapshot is taken BEFORE the PUT).
-    try:
-        from . import snapshots as snap_mod
-        pre_images = _resolved_images(content, env)
-        if pre_images:
-            # log is RunLogger.log (a bound method): reach the owner's run_id
-            owner = getattr(log, "__self__", None) if callable(log) else log
-            run_id = getattr(owner, "run_id", "") or ""
-            snap_mod.snapshot_stack(name, eid, pre_images, run_id=run_id)
-            log(f"[INFO] {name}: snapshot captured "
-                f"({len(pre_images)} service(s)) for rollback.")
-    except Exception as e:  # noqa: BLE001 - snapshotting must never kill the run
-        log(f"[WARN] {name}: rollback snapshot failed ({e}) - continuing.")
+    # what actually RUNS before the update: image ids + restorable refs
+    # (tag@digest). Becomes the rollback snapshot only if the update really
+    # changes an image - a run that changes nothing must not overwrite the
+    # last real "before" state.
+    pre = _running_state(client, project, eid, content, env)
 
+    # Containers created from here on belong to this redeploy. Taken BEFORE
+    # the request: Portainer creates them while the PUT is still open
+    # (2s margin - Docker's Created has whole seconds).
+    redeploy_started = time.time() - 2
     try:
         if stack.get("GitConfig"):
             # git-based stack: the StackFileContent PUT would DETACH it from
             # its repository and redeploy the stale local clone - new commits
             # would never arrive. git/redeploy re-clones first.
-            log(f"[INFO] {name}: git-based stack -> git/redeploy (re-clones the repo).")
-            client.redeploy_git_stack(sid, eid, env)
+            pull = not _has_build(content)
+            log(f"[INFO] {name}: git-based stack -> git/redeploy (re-clones the repo"
+                f"{', pulls images' if pull else ''}).")
+            client.redeploy_git_stack(sid, eid, env, pull=pull,
+                                      git_config=stack.get("GitConfig"))
         else:
             client.update_stack(sid, eid, content, env)
     except PortainerError as e:
-        log(f"[ERROR] Failed to redeploy {name}: {e}")
-        return False
-
-    # Only containers created AFTER this moment count as "the redeploy's"
-    # containers - the old set would otherwise satisfy the wait instantly
-    # (that made runs look "done" in 1s while the pull was still going).
-    redeploy_started = time.time()
-    log(f"[INFO] {name}: HTTP 200, verifying containers...")
+        if not _soft_deploy_error(e):
+            log(f"[ERROR] Failed to redeploy {name}: {e}")
+            return False
+        # a proxy timeout / 502-504 while Portainer keeps deploying: the
+        # containers decide, not the HTTP answer
+        log(f"[WARN] {name}: no clean answer from Portainer ({str(e)[:120]}) - "
+            f"it may still be deploying, checking the containers.")
+    returned = time.time()
+    log(f"[INFO] {name}: deploy sent, verifying containers...")
     deadline = time.time() + int(get("deploy_wait_time", 300))
     interval = 5
     expected = n_services
@@ -393,7 +476,15 @@ def redeploy_single_stack(client, stack, eid, log) -> bool:
                                          created_after=redeploy_started)
         if ready >= expected and ready > 0:
             log(f"[OK] {name}: all {expected} services ready.")
+            _commit_snapshot(client, name, project, eid, pre, log)
             return True
+        if total == 0 and time.time() - returned >= 20:
+            # nothing was recreated (no changed image/config): the existing
+            # containers are the result - accept them if they are healthy
+            ready_all, _ = _containers_ready(client, project, eid, log)
+            if ready_all >= expected and ready_all > 0:
+                log(f"[OK] {name}: nothing to recreate, all {expected} services ready.")
+                return True
         if log and time.time() - last_report >= 30:
             last_report = time.time()
             log(f"[INFO] {name}: waiting... {ready}/{expected} new container(s) ready so far")
@@ -402,6 +493,82 @@ def redeploy_single_stack(client, stack, eid, log) -> bool:
                                      created_after=redeploy_started)
     log(f"[ERROR] {name}: only {ready}/{expected} services ready after wait ({total} containers).")
     return False
+
+
+def _soft_deploy_error(e) -> bool:
+    msg = str(e)
+    return ("timed out" in msg.lower() or "Read timed out" in msg
+            or any(f"HTTP {c}" in msg for c in (502, 503, 504)))
+
+
+def _has_build(compose_text) -> bool:
+    import yaml
+    try:
+        data = yaml.safe_load(compose_text) or {}
+        return any(isinstance(v, dict) and v.get("build")
+                   for v in (data.get("services") or {}).values())
+    except yaml.YAMLError:
+        return False
+
+
+def _restorable_ref(client, eid, compose_ref, image_id) -> str:
+    """compose_ref pinned to the digest that actually runs: 'repo:tag@sha256:..'
+    restores exactly this image even after the tag moved on. Falls back to
+    the compose ref when the image has no registry digest (local builds)."""
+    base = (compose_ref or "").split("@", 1)[0]
+    repo = base.rsplit(":", 1)[0] if ":" in base.rsplit("/", 1)[-1] else base
+    try:
+        info = client.image_inspect(image_id, eid)
+    except (PortainerError, AttributeError):
+        return compose_ref
+    from .cleanup import _norm_ref
+    for rd in info.get("RepoDigests") or []:
+        r_repo, _, digest = rd.partition("@")
+        if digest and _norm_ref(r_repo) == _norm_ref(repo):
+            return f"{base}@{digest}"
+    return compose_ref
+
+
+def _running_state(client, project, eid, content, env) -> dict:
+    """{service: {"image_id", "ref"}} of the running stack - never raises."""
+    try:
+        refs = _resolved_images(content, env)
+        cs = client.containers_by_project(project, eid)
+    except Exception:  # noqa: BLE001 - snapshots must never break a deploy
+        return {}
+    state = {}
+    for c in cs or []:
+        svc = (c.get("Labels") or {}).get("com.docker.compose.service")
+        iid = c.get("ImageID")
+        if not svc or not iid or svc not in refs or svc in state:
+            continue
+        state[svc] = {"image_id": iid,
+                      "ref": _restorable_ref(client, eid, refs[svc], iid)}
+    return state
+
+
+def _commit_snapshot(client, name, project, eid, pre, log, force=False) -> None:
+    """Store `pre` as the rollback target when an image actually changed
+    (or when forced, e.g. for a version pin)."""
+    if not pre:
+        return
+    try:
+        post = {}
+        for c in client.containers_by_project(project, eid) or []:
+            svc = (c.get("Labels") or {}).get("com.docker.compose.service")
+            if svc and c.get("ImageID"):
+                post.setdefault(svc, c["ImageID"])
+        changed = [s for s, v in pre.items() if post.get(s) and post[s] != v["image_id"]]
+        if not (changed or force):
+            return
+        from . import snapshots as snap_mod
+        owner = getattr(log, "__self__", None) if callable(log) else log
+        snap_mod.snapshot_stack(name, eid, {s: v["ref"] for s, v in pre.items()},
+                                run_id=getattr(owner, "run_id", "") or "")
+        log(f"[INFO] {name}: rollback point saved "
+            f"({', '.join(changed) or 'version pin'} changed).")
+    except Exception as e:  # noqa: BLE001 - snapshotting must never fail a deploy
+        log(f"[WARN] {name}: rollback point not saved ({e}).")
 
 
 def redeploy_stacks(client, eid, stacks, log, max_parallel=None) -> tuple:
@@ -590,10 +757,14 @@ def rollback_stack(runlog, stack_name: str, target_images: dict) -> bool:
                        "previous version via 'Version' in the stack view, or "
                        "revert the repo commit.")
             return False
+        rollback_started = time.time() - 2  # before the PUT (see redeploy)
         client.update_stack(sid, eid, content, env)  # always persist the edit
     except PortainerError as e:
-        runlog.log(f"[ERROR] Rollback deploy failed: {e}")
-        return False
+        if not _soft_deploy_error(e):
+            runlog.log(f"[ERROR] Rollback deploy failed: {e}")
+            return False
+        runlog.log(f"[WARN] no clean answer from Portainer ({str(e)[:120]}) - "
+                   f"checking the containers.")
 
     # wait for the rolled-back containers (created after now) - but a fully
     # stopped stack stays stopped (user intent); the file edit is persisted.
@@ -607,7 +778,6 @@ def rollback_stack(runlog, stack_name: str, target_images: dict) -> bool:
     except PortainerError:
         pass
 
-    rollback_started = time.time()
     log2 = runlog.log
     log2("[INFO] Rollback deployed, verifying containers...")
     deadline = time.time() + int(get("deploy_wait_time", 300))
@@ -662,27 +832,53 @@ def _update_portainer_compose_cli(compose_dir: str, log) -> bool:
     # container -> name conflict -> update fails.
     rc, ps_out = _cli(["ps", "-q", "--filter", "name=^portainer$"])
     project = "portainer"
+    host_dir = ""
     if rc == 0 and ps_out.strip():
         cid = ps_out.strip().splitlines()[0]
         rc2, lbl = _cli(["inspect", "--format",
-                         "{{index .Config.Labels \"com.docker.compose.project\"}}",
+                         "{{index .Config.Labels \"com.docker.compose.project\"}}|"
+                         "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}",
                          cid])
-        if rc2 == 0 and lbl.strip():
-            project = lbl.strip()
+        p_lbl, _, wd = (lbl.strip() if rc2 == 0 else "").partition("|")
+        if p_lbl:
+            project = p_lbl
             log(f"[INFO] Using running container's compose project: {project}")
         else:
             log(f"[INFO] Running Portainer container has no compose project "
                 f"label - using default '{project}'.")
+        host_dir = wd.strip()
     else:
         log(f"[INFO] No running Portainer container found - using default "
             f"project '{project}'.")
+    # Relative paths in Portainer's compose file (./data:/data, env_file)
+    # are resolved against the PROJECT DIRECTORY and handed to the host's
+    # daemon. Run from the mount point and they become /host-portainer/data
+    # on the HOST - Portainer would come back with an empty data dir. So the
+    # project directory must be the host path the project was created in.
+    compose_file = str(Path(compose_dir) / "docker-compose.yml")
+    if host_dir and Path(host_dir).is_dir():
+        cwd, base = host_dir, ["docker", "compose", "-p", project]  # mounted 1:1
+    elif host_dir:
+        cwd = compose_dir
+        base = ["docker", "compose", "-p", project, "-f", compose_file,
+                "--project-directory", host_dir]
+    else:
+        text = Path(compose_file).read_text(encoding="utf-8", errors="replace")
+        if re.search(r"(^|[\s'\"-])\.\.?/", text):
+            log("[ERROR] Portainer's compose file uses relative paths, but the "
+                "host directory of the project is unknown (no working_dir label). "
+                "Mount the compose directory at the same path as on the host. "
+                "Self-update skipped to protect Portainer's data.")
+            return False
+        cwd, base = compose_dir, ["docker", "compose", "-p", project]
+    log(f"[INFO] Compose project directory: {host_dir or cwd}")
     try:
-        p = subprocess.run(["docker", "compose", "-p", project, "pull"],
+        p = subprocess.run([*base, "pull"],
                            capture_output=True, text=True, errors="replace",
-                           timeout=900, cwd=compose_dir)
-        up = subprocess.run(["docker", "compose", "-p", project, "up", "-d"],
+                           timeout=900, cwd=cwd)
+        up = subprocess.run([*base, "up", "-d"],
                             capture_output=True, text=True, errors="replace",
-                            timeout=900, cwd=compose_dir)
+                            timeout=900, cwd=cwd)
     except (OSError, ValueError, subprocess.SubprocessError) as e:
         log(f"[ERROR] Portainer self-update failed: {e}")
         return False
@@ -783,10 +979,11 @@ def _default_bridge_gateway(client, eid, log) -> str:
     almost never equals docker0's."""
     try:
         insp = client.network_inspect("bridge", eid)
-        for cfg in insp.get("IPAM", {}).get("Config") or []:
-            gw = cfg.get("Gateway")
-            if gw:
-                return gw
+        gws = [cfg.get("Gateway") for cfg in insp.get("IPAM", {}).get("Config") or []
+               if cfg.get("Gateway")]
+        # dual-stack bridge: prefer the IPv4 gateway (mappings are IPv4)
+        for gw in sorted(gws, key=lambda g: ":" in g):
+            return gw
     except (PortainerError, AttributeError) as e:
         log(f"[WARN] gateway check: default bridge inspect failed ({e}) - "
             f"host-gateway checks skipped.")
@@ -852,6 +1049,14 @@ def _repair_stale_gateways(client, eid, log) -> bool:
             if not stale:
                 log(f"[OK] {cname}: host-gateway ({mapped[0]}) matches docker0 ({host_gw}).")
                 continue
+            # An explicit IP different from docker0 is a deliberate mapping
+            # in the compose file (LAN/Tailscale IP of the host, ...).
+            # Recreating the stack cannot change it - it only restarted that
+            # stack on every run and marked the run failed. Log, don't touch.
+            log(f"[INFO] {cname}: host.docker.internal is mapped to {stale[0]} "
+                f"in the compose file (docker0 is {host_gw}) - explicit "
+                f"mapping, left alone.")
+            continue
             if not project:
                 log(f"[WARN] {cname}: stale host-gateway ({stale[0]} vs docker0 {host_gw}) "
                     f"but no compose project label - cannot auto-recreate.")
@@ -923,6 +1128,12 @@ def _repair_stale_gateways(client, eid, log) -> bool:
         if not stale:
             log(f"[OK] {cname}: host-gateway mapping ({mapped[0]}) matches docker0 ({host_gw}).")
             continue
+        # explicit mapping set in the compose file - recreating cannot
+        # change it (see _repair_stale_gateways)
+        log(f"[INFO] {cname}: host.docker.internal is mapped to {stale[0]} "
+            f"in the compose file (docker0 is {host_gw}) - explicit mapping, "
+            f"left alone.")
+        continue
         if not project:
             log(f"[WARN] {cname}: stale host-gateway ({stale[0]} vs docker0 {host_gw}) "
                 f"but no compose project label - cannot auto-recreate. Manual recreate needed.")
@@ -1007,9 +1218,13 @@ def _run_repair_rule(rule, client, eid, log) -> bool:
             code, out = client.exec_in_container(src_cid, ["getent", "hosts", host], eid)
         except PortainerError as e:
             log(f"[WARN] repair rule '{name}': exec failed ({e}).")
-            code, out = 1, ""
+            code, out = None, ""
         if code == 0:
             log(f"[OK] repair rule '{name}': {host} resolvable from {src}.")
+            return True
+        if code is None or code == 127 or "not found" in (out or ""):
+            log(f"[WARN] repair rule '{name}': DNS check could not run in {src} "
+                f"(no exit code / getent missing in the image) - rule skipped.")
             return True
         log(f"[WARN] repair rule '{name}': {host} NOT resolvable from {src}. Fixing...")
     if fix.get("connect_network") and fix.get("connect_container"):
@@ -1019,15 +1234,27 @@ def _run_repair_rule(rule, client, eid, log) -> bool:
             if not net_id:
                 log(f"[ERROR] repair rule '{name}': network '{fix['connect_network']}' not found.")
                 return False
-            cid = None
+            cid, attached = None, False
             for c in client.all_containers(eid):
                 if (c.get("Names") or [""])[0].lstrip("/") == fix["connect_container"]:
                     cid = c["Id"]
+                    attached = any((n or {}).get("NetworkID") == net_id for n in
+                                   ((c.get("NetworkSettings") or {}).get("Networks")
+                                    or {}).values())
                     break
             if not cid:
                 log(f"[ERROR] repair rule '{name}': container '{fix['connect_container']}' not found.")
                 return False
-            client.connect_network(net_id, cid, eid)
+            if attached:
+                log(f"[INFO] repair rule '{name}': {fix['connect_container']} is "
+                    f"already on {fix['connect_network']} - connect skipped.")
+            else:
+                try:
+                    client.connect_network(net_id, cid, eid)
+                except PortainerError as e:
+                    # attached in the meantime: that is the goal, not an error
+                    if "already exists" not in str(e):
+                        raise
         except PortainerError as e:
             log(f"[ERROR] repair rule '{name}': network connect failed: {e}")
             return False

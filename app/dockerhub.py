@@ -161,6 +161,16 @@ def semver_key(tag):
     return (maj, mi, pat, rank)
 
 
+def _tag_shape(tag: str) -> tuple:
+    """(number of version components, variant suffix): '1.27-alpine' ->
+    (2, '-alpine'), 'v3.1.2' -> (3, ''), '16' -> (1, '')."""
+    t = tag[1:] if tag.startswith("v") else tag
+    m = re.match(r"^(\d+(?:\.\d+)*)(.*)$", t)
+    if not m:
+        return (0, t)
+    return (m.group(1).count(".") + 1, m.group(2).lower())
+
+
 def hub_tags(repo, page_size=100, max_pages=2):
     """Docker Hub API v2 tag list - returns NEWEST-CREATED-FIRST, so 1-2
     requests cover the newest versions (the registry /tags/list endpoint is
@@ -344,11 +354,31 @@ def _check_update_uncached(registry, repo, tag, local_digest):
     cur_key = semver_key(tag)
     if cur_key:
         tags = newest_semver_tags(registry, repo)
-        newest = max((t for t in tags if semver_key(t)), key=semver_key, default=None)
+        cur_shape = _tag_shape(tag)
+        # only tags of the same shape: same variant ('-alpine' stays
+        # '-alpine'), same precision ('16' -> '17', never '16.4'), and the
+        # same major - a major jump (postgres 16 -> 18) is a migration,
+        # not an update, and is only mentioned
+        same = [t for t in tags if semver_key(t) and _tag_shape(t) == cur_shape]
+        minor = [t for t in same if semver_key(t)[0] == cur_key[0]]
+        newest = max(minor, key=semver_key, default=None)
         newer = bool(newest and semver_key(newest) > cur_key)
-        return {"mode": "semver", "current_tag": tag, "latest_tag": newest,
-                "remote_digest": rdigest, "update_available": newer,
-                "note": "" if newer else "pinned version is current"}
+        major = max((t for t in same if semver_key(t)[0] > cur_key[0]),
+                    key=semver_key, default=None)
+        # the tag itself was rebuilt (security fix) or a floating tag like
+        # '16' moved to a new minor - only visible through the digest
+        rebuilt = bool(local_digest and rdigest.split(":")[-1] != local_digest.split(":")[-1])
+        note = ""
+        if not newer and rebuilt:
+            note = "same tag, new image (rebuilt or moved)"
+        elif not newer:
+            note = "pinned version is current"
+        if major:
+            note = (note + "; " if note else "") + f"new major version {major} available"
+        return {"mode": "semver", "current_tag": tag,
+                "latest_tag": newest if newer else tag,
+                "remote_digest": rdigest, "update_available": newer or rebuilt,
+                "note": note}
     elif local_digest:
         return {"mode": "digest", "current_tag": tag, "latest_tag": None,
                 "remote_digest": rdigest,

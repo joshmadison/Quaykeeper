@@ -55,7 +55,16 @@ mounts in this app's stack:
 ```
 
 Enable **Include Portainer updates** in Settings and press **Check compose
-mount** to verify the wiring. A full run then ends with `docker compose pull &&
+mount** to verify the wiring.
+
+> [!IMPORTANT]
+> Relative paths in Portainer's compose file (`./data:/data`, `env_file`) are
+> resolved against the directory the project was created in. Quaykeeper reads
+> that directory from the running Portainer container and passes it to
+> compose, so the host paths stay correct. If it cannot be determined and the
+> file uses relative paths, the self-update is skipped instead of risking an
+> empty Portainer data directory. Simplest setup: mount the compose directory
+> at the **same path** as on the host (`/opt/portainer:/opt/portainer:ro`). A full run then ends with `docker compose pull &&
 docker compose up -d` in that directory — after everything else has finished,
 so the update doesn't cut its own run short.
 

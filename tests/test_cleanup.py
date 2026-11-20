@@ -46,7 +46,7 @@ class FakeDocker:
     def build_cache(self, eid=None): return [{"Size": 20 * MB, "InUse": False}, {"Size": 5 * MB, "InUse": True}]
 
     def remove_image(self, iid, eid=None):
-        if iid == "sha256:busy":
+        if iid in ("sha256:busy", "busy:1"):
             raise PortainerError("HTTP 409: image has dependent child images")
         self.removed.append(iid)
 
@@ -96,7 +96,7 @@ class TestRunCleanup:
         ok = run_cleanup(d, 3, ["sha256:old", "sha256:used"], ["n-orphan", "n-web"],
                          True, logs.append)
         assert ok is True
-        assert d.removed == ["sha256:old", "n-orphan"]   # in-use ids skipped
+        assert d.removed == ["ghcr.io/x/app:1.0", "n-orphan"]   # in-use ids skipped
         assert any("skipped" in l for l in logs)
 
     def test_docker_refusal_is_reported_not_forced(self, tmp_state):
@@ -130,7 +130,7 @@ class TestApi:
         from app import history
         r = client.post("/api/cleanup", json={"images": ["sha256:old"]})
         assert r.status_code == 200 and r.get_json()["ok"] is True
-        assert self.docker.removed == ["sha256:old"]
+        assert self.docker.removed == ["ghcr.io/x/app:1.0"]
         assert history.history()[-1]["kind"] == "cleanup"
 
     def test_post_busy(self, client):
@@ -149,3 +149,61 @@ class _Wrap:
 
     def __init__(self, d): self._d = d
     def __getattr__(self, name): return getattr(self._d, name)
+
+
+class TestReviewRules:
+    """Network/Docker review: Swarm, macvlan, external networks, multi-tag
+    images, digest-pinned rollback images, the automatic prune."""
+
+    def _docker(self):
+        d = FakeDocker()
+        d.nets += [
+            {"Id": "n-ingress", "Name": "ingress", "Driver": "overlay", "Ingress": True, "Scope": "swarm"},
+            {"Id": "n-gw", "Name": "docker_gwbridge", "Driver": "bridge"},
+            {"Id": "n-ovl", "Name": "app_overlay", "Driver": "overlay", "Scope": "swarm"},
+            {"Id": "n-mac", "Name": "lan", "Driver": "macvlan"},
+            {"Id": "n-proxy", "Name": "proxy", "Driver": "bridge"},
+        ]
+        d.stacks = lambda: [{"Id": 1, "Name": "web", "EndpointId": 3},
+                            {"Id": 2, "Name": "paused", "EndpointId": 3}]
+        d.stack_file = lambda sid, eid=None: (
+            "services:\n  a:\n    image: x\nnetworks:\n  proxy:\n    external: true\n"
+            if sid == 1 else "services: {}\n")
+        return d
+
+    def test_swarm_networks_never_listed(self, tmp_state):
+        from app.cleanup import analyze
+        names = {n["name"] for n in analyze(self._docker(), 3)["networks"]}
+        assert not names & {"ingress", "docker_gwbridge", "app_overlay"}
+
+    def test_macvlan_and_external_are_not_safe(self, tmp_state):
+        from app.cleanup import analyze
+        by = {n["name"]: n for n in analyze(self._docker(), 3)["networks"]}
+        assert by["lan"]["safe"] is False and "macvlan" in by["lan"]["note"]
+        assert by["proxy"]["safe"] is False and "external" in by["proxy"]["note"]
+        assert by["mynet"]["safe"] is True
+
+    def test_multi_tag_image_removed_tag_by_tag(self, tmp_state):
+        from app.cleanup import run_cleanup
+        d = FakeDocker()
+        d.imgs.append({"Id": "sha256:multi", "RepoTags": ["a/b:1", "a/b:latest"], "Size": MB})
+        assert run_cleanup(d, 3, ["sha256:multi"], [], False, lambda m: None)
+        assert d.removed == ["a/b:1", "a/b:latest"]
+
+    def test_digest_pinned_snapshot_protects_dangling_image(self, tmp_state):
+        from app import snapshots
+        from app.cleanup import analyze
+        snapshots.snapshot_stack("web", 3, {"web": "nginx:latest@sha256:" + "b" * 64})
+        d = FakeDocker()
+        d.imgs.append({"Id": "sha256:prev", "RepoTags": [], "Size": MB,
+                       "RepoDigests": ["nginx@sha256:" + "b" * 64]})
+        by = {i["id"]: i for i in analyze(d, 3)["images"]}
+        assert by["sha256:prev"]["safe"] is False
+
+    def test_run_prune_keeps_rollback_images(self, tmp_state, rollback_snapshot):
+        from app.updater import cleanup_docker
+        d = FakeDocker()
+        d.prune_images = lambda eid=None: pytest.fail("must not prune everything")
+        assert cleanup_docker(d, 3, lambda m: None) in (True, False)
+        assert "redis:7.2" not in d.removed            # rollback target kept
+        assert "ghcr.io/x/app:1.0" in d.removed

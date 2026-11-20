@@ -103,18 +103,31 @@ class Portainer:
         self._req("PUT", f"/api/stacks/{stack_id}?endpointId={eid}",
                   json=payload, timeout=300)
 
-    def redeploy_git_stack(self, stack_id, eid, env=None, prune=True, pull=False):
+    def redeploy_git_stack(self, stack_id, eid, env=None, prune=True, pull=True,
+                           git_config=None):
         """Redeploy a stack created from a git repository. The regular
         update_stack() (PUT /stacks/{id} with StackFileContent) DETACHES git
         stacks from their repository and redeploys the stale local clone -
-        new commits would never arrive. This endpoint re-clones first."""
+        new commits would never arrive. This endpoint re-clones first.
+
+        git_config: the stack's GitConfig. Its branch/ref is passed on, and
+        for private repositories RepositoryAuthentication=true makes
+        Portainer reuse the stored credentials (an empty password means
+        'keep the saved one').
+        pull: False only for stacks with build: services - a registry pull
+        on build-only services errors out."""
+        git_config = git_config or {}
         payload = {
             "Env": env or [],
             "Prune": prune,
-            # pull=False: compose rebuilds build: services anyway (>=2.26);
-            # a registry pull on build-only services errors out
             "PullImage": pull,
+            "RepositoryAuthentication": bool(git_config.get("Authentication")),
         }
+        if git_config.get("ReferenceName"):
+            payload["RepositoryReferenceName"] = git_config["ReferenceName"]
+        auth = git_config.get("Authentication") or {}
+        if isinstance(auth, dict) and auth.get("Username"):
+            payload["RepositoryUsername"] = auth["Username"]
         self._req("PUT", f"/api/stacks/{stack_id}/git/redeploy?endpointId={eid}",
                   json=payload, timeout=600)
 
@@ -153,7 +166,9 @@ class Portainer:
         return self._docker("POST", "/build/prune?all=true", eid).json()
 
     def images(self, eid=None):
-        return self._docker("GET", "/images/json?all=1", eid).json()
+        """Top-level images only (all=0): with all=1 the classic builder's
+        intermediate layers were listed too - not removable on their own."""
+        return self._docker("GET", "/images/json", eid).json()
 
     def networks(self, eid=None):
         return self._docker("GET", "/networks", eid).json()
@@ -180,7 +195,7 @@ class Portainer:
                             eid).json()
 
     def connect_network(self, network_id, container_id, eid=None):
-        return self._docker("POST", f"/networks/{network_id}/connect", eid,
+        return self._docker("POST", f"/networks/{quote(network_id, safe='')}/connect", eid,
                             json={"Container": container_id})
 
     def restart_container(self, cid, eid=None, timeout_s=30):
@@ -209,9 +224,9 @@ class Portainer:
             i += 8 + size
         try:
             insp = self._docker("GET", f"/exec/{exec_id}/json", eid).json()
-            code = insp.get("ExitCode", 0)
+            code = insp.get("ExitCode")
         except PortainerError:
-            code = 0
+            code = None  # unknown - never pretend the command succeeded
         return code, stdout.decode("utf-8", errors="replace").strip()
 
     def backup(self, password=None):

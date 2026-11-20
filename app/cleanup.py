@@ -19,6 +19,11 @@ PROJECT_LABEL = "com.docker.compose.project"
 
 # Docker's own networks - always present, never 'unused'
 BUILTIN_NETWORKS = {"bridge", "host", "none"}
+# never offered for removal: Swarm infrastructure (routing mesh)
+SYSTEM_NETWORKS = {"ingress", "docker_gwbridge"}
+# hold host-specific settings (parent interface, subnet) that are hard to
+# recreate - removable only on purpose
+SPECIAL_DRIVERS = {"macvlan", "ipvlan"}
 
 
 def network_ids_in_use(containers) -> tuple:
@@ -50,6 +55,8 @@ def unused_networks(networks, containers) -> list:
             continue
         if n.get("Id") in ids or name in names:
             continue
+        if name in SYSTEM_NETWORKS or n.get("Ingress") or n.get("Scope") == "swarm":
+            continue  # Swarm: in use on other nodes / routing mesh
         out.append(n)
     return out
 
@@ -69,13 +76,51 @@ def _tags(img) -> list:
 
 
 def _rollback_refs() -> dict:
-    """{normalized image ref: [stack names]} of all rollback snapshots -
-    images a 'Restore these versions' would need again."""
+    """{key: [stack names]} of all rollback snapshots - images a 'Restore
+    these versions' would need again. Keys are normalized tag refs
+    ('redis:7') and, for snapshots pinned to a digest, 'repo@sha256:...'
+    (matches the image even after its tag moved on and it went dangling)."""
     from .snapshots import _load_all
     out: dict = {}
     for stack, snap in (_load_all() or {}).items():
         for ref in ((snap or {}).get("images") or {}).values():
-            out.setdefault(_norm_ref(ref), []).append(stack)
+            base, _, digest = (ref or "").partition("@")
+            out.setdefault(_norm_ref(base), []).append(stack)
+            if digest:
+                repo = base.rsplit(":", 1)[0] if ":" in base.rsplit("/", 1)[-1] else base
+                out.setdefault(f"{_norm_ref(repo)}@{digest}", []).append(stack)
+    return out
+
+
+def _image_keys(img) -> list:
+    keys = [_norm_ref(t) for t in _tags(img)]
+    for rd in img.get("RepoDigests") or []:
+        repo, _, digest = rd.partition("@")
+        if digest:
+            keys.append(f"{_norm_ref(repo)}@{digest}")
+    return keys
+
+
+def _external_networks(client, eid) -> dict:
+    """{network name: [stack names]} declared 'external: true' in any
+    Portainer stack - such a network may be unattached while its stacks are
+    down, and removing it makes their next deploy fail."""
+    import yaml
+    out: dict = {}
+    try:
+        stacks = [s for s in client.stacks() if s.get("EndpointId") in (None, eid)]
+    except (PortainerError, AttributeError):
+        return out
+    for s in stacks:
+        try:
+            data = yaml.safe_load(client.stack_file(s["Id"], eid) or "") or {}
+        except Exception:  # noqa: BLE001 - one bad file must not hide the rest
+            continue
+        for key, spec in ((data.get("networks") or {}) if isinstance(data, dict) else {}).items():
+            if isinstance(spec, dict) and spec.get("external"):
+                ext = spec.get("external")
+                real = spec.get("name") or (ext.get("name") if isinstance(ext, dict) else None) or key
+                out.setdefault(real, []).append(s.get("Name") or "?")
     return out
 
 
@@ -92,12 +137,14 @@ def _known_projects(client, eid, containers) -> set:
 
 
 # ------------------------------------------------------------------ analyze
-def analyze(client, eid) -> dict:
-    """Everything the Cleanup tab shows. Read-only."""
+def analyze(client, eid, networks: bool = True) -> dict:
+    """Everything the Cleanup tab shows. Read-only.
+    networks=False: images only (used by the automatic prune of a run)."""
     imgs = client.images(eid)
     cs = client.all_containers(eid)
-    nets = client.networks(eid)
+    nets = client.networks(eid) if networks else []
     projects = _known_projects(client, eid, cs)
+    external = _external_networks(client, eid) if networks else {}
     rollback = _rollback_refs()
 
     used_img = {c.get("ImageID") for c in cs if c.get("ImageID")}
@@ -106,7 +153,7 @@ def analyze(client, eid) -> dict:
         if i.get("Id") in used_img:
             continue
         tags = _tags(i)
-        needed_by = sorted({st for t in tags for st in rollback.get(_norm_ref(t), [])})
+        needed_by = sorted({st for k in _image_keys(i) for st in rollback.get(k, [])})
         images.append({
             "id": i.get("Id"),
             "tags": tags,
@@ -122,18 +169,27 @@ def analyze(client, eid) -> dict:
 
     networks = []
     for n in unused_networks(nets, cs):
+        name = n.get("Name") or ""
         project = ((n.get("Labels") or {}).get(PROJECT_LABEL) or "").lower()
-        protected = bool(project) and project in projects
+        driver = (n.get("Driver") or "").lower()
+        if name in external:
+            note = (f"declared external by {', '.join(sorted(external[name]))} - "
+                    f"needed when that stack starts")
+        elif project and project in projects:
+            note = f"belongs to stack '{project}' - kept so the stack can start again"
+        elif driver in SPECIAL_DRIVERS:
+            note = (f"{driver} network - holds parent interface and subnet; "
+                    f"recreating it needs those settings")
+        else:
+            note = ""
         networks.append({
             "id": n.get("Id"),
-            "name": n.get("Name"),
+            "name": name,
             "driver": n.get("Driver"),
             "created": n.get("Created"),
             "project": project or None,
-            "safe": not protected,
-            "note": (f"belongs to stack '{project}' - kept so the stack can "
-                     f"start again") if protected else
-                    ("orphaned compose network" if project else "no stack"),
+            "safe": not note,
+            "note": note or ("orphaned compose network" if project else "no stack"),
         })
     networks.sort(key=lambda x: (not x["safe"], x["name"] or ""))
 
@@ -178,11 +234,24 @@ def analyze(client, eid) -> dict:
 
 
 # ---------------------------------------------------------------- run
+def remove_image(client, eid, img) -> None:
+    """Remove one unused image without force: tag by tag (an ID that
+    carries several tags is refused by Docker with 409 'referenced in
+    multiple repositories'); untagged images by ID. The last untag removes
+    the image."""
+    tags = img.get("tags") or []
+    if not tags:
+        client.remove_image(img["id"], eid)
+        return
+    for tag in tags:
+        client.remove_image(tag, eid)
+
+
 def run_cleanup(client, eid, image_ids, network_ids, build_cache, log) -> bool:
     """Remove exactly the picked items. Every id is re-checked against a
     fresh analyze(): anything that got used again (or vanished) since the
     user looked is skipped, never forced. Returns True if nothing failed."""
-    current = analyze(client, eid)
+    current = analyze(client, eid, networks=bool(network_ids))
     imgs = {i["id"]: i for i in current["images"]}
     nets = {n["id"]: n for n in current["networks"]}
     failed = 0
@@ -194,7 +263,7 @@ def run_cleanup(client, eid, image_ids, network_ids, build_cache, log) -> bool:
             log(f"[INFO] image {label}: no longer unused - skipped")
             continue
         try:
-            client.remove_image(iid, eid)
+            remove_image(client, eid, img)
             removed_imgs += 1
             freed += img["size_mb"]
             log(f"[OK] removed image {label} ({img['size_mb']} MB)")
