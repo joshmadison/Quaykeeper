@@ -141,3 +141,19 @@ class TestApiSmoke:
     def test_run_log_path_traversal_blocked(self, client):
         r = client.get("/api/runs/..%2f..%2fetc%2fpasswd/log")
         assert r.status_code in (400, 404)  # never 200
+
+class TestInventoryNetworks:
+    """Docker keys a container's networks by NAME (id in NetworkID)."""
+
+    def test_unused_networks_matched_by_network_id(self):
+        from app.cleanup import unused_networks
+        nets = [{"Id": "n-bridge", "Name": "bridge"}, {"Id": "n-host", "Name": "host"},
+                {"Id": "n-none", "Name": "none"},
+                {"Id": "n-app", "Name": "immich_default"},
+                {"Id": "n-stopped", "Name": "media_default"},
+                {"Id": "n-orphan", "Name": "oldstack_default"}]
+        cs = [{"State": "running", "NetworkSettings": {"Networks": {
+                  "immich_default": {"NetworkID": "n-app"}}}},
+              {"State": "exited", "NetworkSettings": {"Networks": {
+                  "media_default": {"NetworkID": "n-stopped"}}}}]
+        assert [n["Name"] for n in unused_networks(nets, cs)] == ["oldstack_default"]

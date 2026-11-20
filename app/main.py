@@ -591,11 +591,8 @@ def api_inventory():
     used_ids = {c.get("ImageID") for c in cs if c.get("ImageID")}
     unused = [i for i in imgs if i.get("Id") not in used_ids]
     unused_mb = sum((i.get("Size") or 0) for i in unused) // (1024 * 1024)
-    containers_per_net: dict = {}
-    for c in cs:
-        for nid in ((c.get("NetworkSettings", {}) or {}).get("Networks") or {}):
-            containers_per_net[nid] = containers_per_net.get(nid, 0) + 1
-    unused_nets = [n for n in nets if containers_per_net.get(n.get("Id"), 0) == 0]
+    from .cleanup import unused_networks
+    unused_nets = unused_networks(nets, cs)
     payload = {
         "images_total": len(imgs),
         "images_unused": len(unused),
