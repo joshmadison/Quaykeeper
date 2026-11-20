@@ -30,6 +30,11 @@ def record_prune_stats(reclaimed_mb: int, images_deleted: int) -> None:
     with _lock:
         with open(STATS_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
+    try:
+        if STATS_FILE.stat().st_size > 64 * 1024:
+            prune_stats_rotation()  # keeps the file small; chart needs 30d
+    except OSError:
+        pass
 
 
 def prune_stats(days: int = 30) -> dict:
@@ -37,7 +42,7 @@ def prune_stats(days: int = 30) -> dict:
     if not STATS_FILE.exists():
         return {"reclaimed_mb_30d": 0, "prune_runs_30d": 0,
                 "images_deleted_30d": 0}
-    cutoff = time.time() - STATS_FILE_MAX_AGE_DAYS * 86400
+    cutoff = time.time() - int(days) * 86400
     mb = imgs = runs = 0
     with _lock:
         for line in STATS_FILE.read_text(encoding="utf-8").splitlines():
@@ -196,6 +201,7 @@ class RunLogger:
         self.path = RUNS_DIR / f"{self.run_id}.log"
         self._fh = open(self.path, "w", encoding="utf-8")
         self.steps: list = []
+        self._finish_lock = threading.Lock()
         mark_running(self.run_id, kind, trigger)
 
     def log(self, msg: str) -> None:
@@ -215,9 +221,14 @@ class RunLogger:
         redeploy replaces this container mid-wait (the expected outcome of
         a deliberate self-update), so neither 'failed' nor 'success' would
         be truthful. Recorded as neutral 'restarted' entry, log preserved."""
-        if getattr(self, "_finished", False):
-            return self._entry
-        self._finished = True
+        with self._finish_lock:
+            if getattr(self, "_finished", False):
+                return self._entry
+            entry = self._finalize_neutral()
+            self._finished = True  # only after history/status were written
+            return entry
+
+    def _finalize_neutral(self) -> dict:
         try:
             self._fh.write(f"[{time.strftime('%H:%M:%S')}] Run finalized "
                            f"(self-update redeploy triggered)\n")
@@ -255,9 +266,14 @@ class RunLogger:
     def finish(self, ok: bool) -> dict:
         """Finalize the run. Idempotent: the caller and an early self-finalize
         (before the service redeploys itself and dies) may both call this."""
-        if getattr(self, "_finished", False):
-            return self._entry
-        self._finished = True
+        with self._finish_lock:
+            if getattr(self, "_finished", False):
+                return self._entry
+            entry = self._finalize_ok(ok)
+            self._finished = True  # only after history/status were written
+            return entry
+
+    def _finalize_ok(self, ok) -> dict:
         try:
             self._fh.write(f"[{time.strftime('%H:%M:%S')}] Run finished, success={ok}\n")
             self._fh.close()

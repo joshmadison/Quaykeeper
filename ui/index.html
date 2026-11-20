@@ -920,7 +920,8 @@ document.addEventListener('click',e=>{
 async function redeployStack(id,name){
  if(!confirm(`Redeploy stack "${name}" now? Pulls images and restarts its containers.`))return;
  try{const r=await api(`/api/stacks/${id}/redeploy`,{method:'POST'});
-  toast(r.ok?`Stack "${name}" redeployed`:`Redeploy FAILED - see run ${r.run_id}`,r.ok?'ok':'err')}
+  toast(`Redeploy of "${name}" started - run ${r.run_id}`,'ok');gateBusyFlag=true;
+  setBusyUI(true);ensureBannerTimer();await refreshRunBanner()}
  catch(e){toast(e.message,'err')}
 }
 

@@ -7,7 +7,9 @@ consecutive failure backoff, exception logging (never bare except), shared
 job gate.
 """
 import json
+import os
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -30,14 +32,28 @@ def _load_next() -> dict:
             pass
     return {}
 
+_save_lock = threading.Lock()
+
+
 def _save_next(next_check: float, next_full: float) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = NEXT_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps({
-        "next_check": next_check, "next_full_update": next_full,
-        "spec": _spec(),
-    }), encoding="utf-8")
-    tmp.replace(NEXT_FILE)
+    """Atomic write, safe from several threads (tick, check worker, update
+    worker, rollback): one lock plus a unique temp file - a shared
+    'schedule.tmp' let one thread's replace() steal the other's file."""
+    payload = json.dumps({"next_check": next_check, "next_full_update": next_full,
+                          "spec": _spec()})
+    with _save_lock:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix="schedule.", suffix=".tmp", dir=DATA_DIR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp, NEXT_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 def _spec() -> str:
     """Compact identity of the current schedule configuration.
@@ -92,6 +108,7 @@ class Scheduler:
         self.consecutive_failures = 0
         self.last_tick = None
         self.last_error = None
+        self._spec_seen = None
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -107,6 +124,7 @@ class Scheduler:
         if saved.get("spec") != _spec():
             full = _next_full_from(now)  # schedule changed while we were off
         self.next_full_update = max(full, now + BOOT_GRACE_S)
+        self._spec_seen = _spec()
         self._persist()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="scheduler", daemon=True)
@@ -120,7 +138,12 @@ class Scheduler:
 
     def _loop(self):
         while not self._stop.wait(10):
-            self._tick()
+            try:
+                self._tick()
+            except Exception:  # noqa: BLE001 - the loop must never die
+                self.last_error = traceback.format_exc()
+                print(f"[scheduler] tick failed:\n{self.last_error}",
+                      file=sys.stderr, flush=True)
 
     def _tick(self):
         """One scheduler heartbeat. Returns quickly: due jobs are handed to
@@ -129,19 +152,36 @@ class Scheduler:
         load()  # pick up config changes from the UI
         try:
             now = time.time()
+            # schedule changed in the UI (or config.yaml) since we planned
+            # the next run: replan now, not after the old slot fired
+            spec = _spec()
+            if self._spec_seen is not None and spec != self._spec_seen:
+                self.next_full_update = _next_full_from(now)
+                self._persist()
+                print(f"[scheduler] schedule changed to {_schedule_desc()} - "
+                      f"next full update replanned", flush=True)
+            self._spec_seen = spec
             # Jobs run in worker threads, never inline: the loop must keep
             # ticking while a 3-5 min update runs. An inline run froze
             # last_tick, /healthz went 503 after 120s, the container
             # healthcheck marked us unhealthy and the container was
             # restarted mid-run (seen as nightly 'startup-recovery' fails).
+            # The update goes first: when both are due in the same tick, a
+            # check must not grab the gate and push the update away.
+            if now >= self.next_full_update:
+                started = self.trigger_update_async("scheduled")
+                if started or gate.current().get("holder") == "update":
+                    # ours started, or a manual full update is running and
+                    # satisfies this slot
+                    self._bump_full()
+                else:
+                    # another job (check, cleanup, redeploy, ...) holds the
+                    # gate: retry shortly instead of silently skipping
+                    self.next_full_update = now + 60
+                    self._persist()
             if now >= self.next_check:
                 self._bump_check()
                 self.trigger_check_async()
-            if now >= self.next_full_update:
-                self.trigger_update_async("scheduled")
-                # bump even when the gate was busy: a running manual
-                # update satisfies this slot
-                self._bump_full()
         except Exception:
             # never swallow: log to stderr (visible in journald/systemd)
             self.last_error = traceback.format_exc()

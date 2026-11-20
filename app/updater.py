@@ -185,7 +185,7 @@ def backup_portainer(client: Portainer, log, backup_dir) -> bool:
 
 
 # --------------------------------------------------------------------- cleanup
-def cleanup_docker(client: Portainer, eid, log) -> None:
+def cleanup_docker(client: Portainer, eid, log) -> bool:
     """Image + buildcache prune ONLY - via the Portainer API (admin key).
 
     The bash script ran `docker system prune -af`, which also deletes STOPPED
@@ -201,7 +201,7 @@ def cleanup_docker(client: Portainer, eid, log) -> None:
     except PortainerError as e:
         log(f"[WARN] Image prune failed: {e}")
         log("[INFO] Prune routes are admin-only - use an admin Portainer API key.")
-        return
+        return False
     reclaimed_img = img.get("SpaceReclaimed") or 0
     try:
         bld = client.prune_build_cache(eid)
@@ -220,6 +220,7 @@ def cleanup_docker(client: Portainer, eid, log) -> None:
         )
     except Exception as e:  # noqa: BLE001 - stats must never kill the run
         log(f"[WARN] prune stats not recorded: {e}")
+    return True
 
 
 # --------------------------------------------------------------------- stacks
@@ -468,7 +469,12 @@ def self_update_run(runlog) -> bool:
         runlog.log(f"[ERROR] {e}")
         runlog.finish(False)
         return False
-    self_names = set(_self_stack_names(client, eid))
+    try:
+        self_names = set(_self_stack_names(client, eid))
+    except (PortainerError, OSError) as e:
+        runlog.log(f"[ERROR] Could not identify this app's own stack: {e}")
+        runlog.finish(False)
+        return False
     if not self_names:
         runlog.log("[ERROR] Could not identify this app's own stack - "
                    "is this app really deployed as a Portainer stack?")
@@ -1098,8 +1104,8 @@ def run_full_update(runlog) -> bool:
 
     ok_backup = backup_portainer(client, runlog.log, Path(get("backup_dir")))
     runlog.step("backup", ok_backup, "" if ok_backup else "backup failed/skipped - continuing")
-    cleanup_docker(client, eid, runlog.log)
-    runlog.step("prune", True)
+    ok_prune = cleanup_docker(client, eid, runlog.log)
+    runlog.step("prune", ok_prune, "" if ok_prune else "prune failed - continuing")
 
     try:
         stacks = [s for s in client.stacks() if s.get("EndpointId") == eid]

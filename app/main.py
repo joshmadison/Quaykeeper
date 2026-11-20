@@ -103,6 +103,46 @@ def _client_or_error():
         return None, _err(str(e), 502)
 
 
+def _job(holder: str, kind: str, work, background: bool):
+    """Run one gated job with a RunLogger. Whatever happens - an exception
+    of any type included - the run is finished (never stuck in 'running')
+    and the gate is released. work(runlog) -> bool.
+
+    background=True: start in a worker and answer at once with the run_id
+    (long jobs must not block one of the 8 waitress threads)."""
+    if not gate.try_acquire(holder):
+        return _err("another job is running - see /api/runs/current", 409)
+    try:
+        runlog = RunLogger(kind, "manual")
+        gate.set_runlog(runlog)
+    except Exception:
+        gate.release()
+        raise
+
+    def run() -> bool:
+        ok = False
+        try:
+            ok = bool(work(runlog))
+        except Exception:  # noqa: BLE001 - recorded in the run log
+            import traceback
+            runlog.log("[ERROR] crashed with an unexpected error:\n"
+                       + traceback.format_exc())
+            ok = False
+        finally:
+            try:
+                runlog.finish(ok)
+            finally:
+                gate.release()
+                _inventory_cache.clear()
+        return ok
+
+    if background:
+        threading.Thread(target=run, name=f"job-{kind}", daemon=True).start()
+        return jsonify({"ok": True, "started": True, "run_id": runlog.run_id})
+    ok = run()
+    return jsonify({"ok": ok, "run_id": runlog.run_id})
+
+
 # ------------------------------------------------------------------- static UI
 @app.route("/")
 def index():
@@ -400,26 +440,21 @@ def api_stack_set_image(stack_id):
 
 @app.route("/api/stacks/<int:stack_id>/redeploy", methods=["POST"])
 def api_stack_redeploy(stack_id):
-    if not gate.try_acquire("redeploy"):
-        return _err("another job is running - see /api/runs/current", 409)
-    runlog = None
+    """Redeploy one stack. Runs in the background (it waits up to
+    deploy_wait_time for healthy containers); progress via the run banner."""
+    client, e = _client_or_error()
+    if e:
+        return e
     try:
-        client = _client()
-        eid = client.endpoint_id
         stack = next((s for s in client.stacks() if s["Id"] == stack_id), None)
-        if not stack:
-            return _err("stack not found", 404)
-        runlog = RunLogger("redeploy", "manual")
-        gate.set_runlog(runlog)
-        ok = updater.redeploy_single_stack(client, stack, eid, runlog.log)
-        runlog.finish(ok)
-        return jsonify({"ok": ok, "run_id": runlog.run_id})
-    except (PortainerError, KeyError) as e:
-        if runlog:
-            runlog.finish(False)
-        return _err(str(e), 500)
-    finally:
-        gate.release()
+    except PortainerError as ex:
+        return _err(str(ex), 502)
+    if not stack:
+        return _err("stack not found", 404)
+    eid = client.endpoint_id
+    return _job("redeploy", "redeploy",
+                lambda rl: updater.redeploy_single_stack(client, stack, eid, rl.log),
+                background=True)
 
 
 # ------------------------------------------------------------------ versions
@@ -586,25 +621,34 @@ def api_self_update():
     recorded in history BEFORE the container dies."""
     if not gate.try_acquire("self_update"):
         return _err("another job is running - see /api/runs/current", 409)
+    handed_off = False
     try:
         runlog = RunLogger("self_update", "manual")
         gate.set_runlog(runlog)
         runlog.step("self_update_started", True)
 
         def _worker():
+            # the worker owns the gate until the redeploy returned: releasing
+            # it earlier let a scheduled update interleave with the redeploy
             try:
                 updater.self_update_run(runlog)
-            except Exception:  # noqa: BLE001 - the process may die mid-request
-                pass
+            except Exception:  # noqa: BLE001 - recorded, never silent
+                import traceback
+                runlog.log("[ERROR] self-update crashed:\n" + traceback.format_exc())
+                runlog.finish(False)  # idempotent if finish_neutral() ran
+            finally:
+                gate.release()
 
         threading.Thread(target=_worker, daemon=True).start()
+        handed_off = True
         # give the redeploy a moment to fire; if the container survives
         # (nothing to do / error), the worker has finished already
         threading.Event().wait(2.0)
         return jsonify({"ok": True, "run_id": runlog.run_id,
                         "note": "redeploying - container will restart"})
     finally:
-        gate.release()
+        if not handed_off:
+            gate.release()
 
 
 @app.route("/api/inventory")
@@ -646,17 +690,13 @@ def api_prune():
     client, e = _client_or_error()
     if e:
         return e
-    if not gate.try_acquire("prune"):
-        return _err("another job is running - see /api/runs/current", 409)
-    try:
-        runlog = RunLogger("prune", "manual")
-        gate.set_runlog(runlog)
-        updater.cleanup_docker(client, client.endpoint_id, runlog.log)
-        runlog.step("docker_prune", True)
-        runlog.finish(True)
-        return jsonify({"ok": True, "run_id": runlog.run_id})
-    finally:
-        gate.release()
+    eid = client.endpoint_id
+
+    def work(rl):
+        ok = updater.cleanup_docker(client, eid, rl.log)
+        rl.step("docker_prune", ok)
+        return ok
+    return _job("prune", "prune", work, background=True)
 
 
 @app.route("/api/cleanup", methods=["GET"])
@@ -695,24 +735,19 @@ def api_cleanup_post():
     client, e = _client_or_error()
     if e:
         return e
-    if not gate.try_acquire("cleanup"):
-        return _err("another job is running - see /api/runs/current", 409)
-    try:
-        from . import cleanup
-        runlog = RunLogger("cleanup", "manual")
-        gate.set_runlog(runlog)
+    eid = client.endpoint_id
+    from . import cleanup
+
+    def work(rl):
         try:
-            ok = cleanup.run_cleanup(client, client.endpoint_id, image_ids,
-                                     network_ids, build_cache, runlog.log)
+            ok = cleanup.run_cleanup(client, eid, image_ids, network_ids,
+                                     build_cache, rl.log)
         except PortainerError as err:
-            runlog.log(f"[ERROR] {err}")
+            rl.log(f"[ERROR] {err}")
             ok = False
-        runlog.step("cleanup", ok)
-        runlog.finish(ok)
-        _inventory_cache.clear()
-        return jsonify({"ok": ok, "run_id": runlog.run_id})
-    finally:
-        gate.release()
+        rl.step("cleanup", ok)
+        return ok
+    return _job("cleanup", "cleanup", work, background=False)
 
 
 # ------------------------------------------------------------------ settings
