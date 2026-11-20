@@ -152,6 +152,22 @@ class Portainer:
     def networks(self, eid=None):
         return self._docker("GET", "/networks", eid).json()
 
+    def remove_image(self, image_id, eid=None):
+        """Remove ONE image (no force: an image still used by a container or
+        with dependent child images is refused by Docker with HTTP 409)."""
+        return self._docker("DELETE", f"/images/{quote(image_id, safe='')}", eid)
+
+    def remove_network(self, network_id, eid=None):
+        return self._docker("DELETE", f"/networks/{quote(network_id, safe='')}", eid)
+
+    def volumes(self, eid=None):
+        return self._docker("GET", "/volumes", eid).json().get("Volumes") or []
+
+    def build_cache(self, eid=None):
+        """Build cache records (Docker API 1.42+: /system/df?type=build-cache)."""
+        return self._docker("GET", "/system/df?type=build-cache",
+                            eid).json().get("BuildCache") or []
+
     def network_inspect(self, name_or_id, eid=None):
         return self._docker("GET",
                             f"/networks/{quote(name_or_id, safe='')}",

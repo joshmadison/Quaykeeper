@@ -623,6 +623,62 @@ def api_prune():
         gate.release()
 
 
+@app.route("/api/cleanup", methods=["GET"])
+def api_cleanup_get():
+    """Unused images/networks (removable) plus stopped containers, unused
+    volumes and build cache (shown only) - see app/cleanup.py."""
+    client, e = _client_or_error()
+    if e:
+        return e
+    from . import cleanup
+    try:
+        return jsonify(cleanup.analyze(client, client.endpoint_id))
+    except PortainerError as err:
+        return _err(str(err), 502)
+
+
+@app.route("/api/cleanup", methods=["POST"])
+def api_cleanup_post():
+    """Remove the picked items: {"images": [ids], "networks": [ids],
+    "build_cache": bool}. Recorded as a 'cleanup' run in the history."""
+    body = request.get_json(silent=True) or {}
+
+    def ids(key):
+        v = body.get(key) or []
+        if not isinstance(v, list) or len(v) > 500 or \
+                not all(isinstance(x, str) and 0 < len(x) <= 128 for x in v):
+            raise ValueError(key)
+        return list(dict.fromkeys(v))
+    try:
+        image_ids, network_ids = ids("images"), ids("networks")
+    except ValueError as bad:
+        return _err(f"'{bad}' must be a list of ids", 400)
+    build_cache = bool(body.get("build_cache"))
+    if not (image_ids or network_ids or build_cache):
+        return _err("nothing selected", 400)
+    client, e = _client_or_error()
+    if e:
+        return e
+    if not gate.try_acquire("cleanup"):
+        return _err("another job is running - see /api/runs/current", 409)
+    try:
+        from . import cleanup
+        runlog = RunLogger("cleanup", "manual")
+        gate.set_runlog(runlog)
+        try:
+            ok = cleanup.run_cleanup(client, client.endpoint_id, image_ids,
+                                     network_ids, build_cache, runlog.log)
+        except PortainerError as err:
+            runlog.log(f"[ERROR] {err}")
+            ok = False
+        runlog.step("cleanup", ok)
+        runlog.finish(ok)
+        _inventory_cache.clear()
+        return jsonify({"ok": ok, "run_id": runlog.run_id})
+    finally:
+        gate.release()
+
+
 # ------------------------------------------------------------------ settings
 @app.route("/api/settings", methods=["GET"])
 def api_settings_get():
